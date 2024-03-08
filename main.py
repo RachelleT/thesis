@@ -14,6 +14,8 @@ from sklearn.model_selection import KFold
 
 def training_classifier(training_data):
 
+    batch_size = 64
+
     # Apply Transforms
     transform_train = transforms.Compose([
         transforms.ToPILImage(),
@@ -25,12 +27,76 @@ def training_classifier(training_data):
 
     train_dataset = Dataset(training_data, transform_train)
 
-    # Define the number of folds and batch size
-    k_folds = 3
+    # Define the data loaders for the current fold
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=batch_size,
+    )
+
+    net = ResNet.ResNet50(10, 1)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=0.0001)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=5)
+
+    EPOCHS = 200
+    for epoch in range(EPOCHS):
+        losses = []
+        running_loss = 0
+        for i, inp in enumerate(train_loader):
+            inputs, labels = inp
+            # inputs, labels = inputs, labels
+            optimizer.zero_grad()
+
+            outputs = net(inputs)
+            loss = criterion(outputs, labels)
+            losses.append(loss.item())
+
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item()
+
+            if i % 100 == 0 and i > 0:
+                print(f'Loss [{epoch + 1}, {i}](epoch, minibatch): ', running_loss / 100)
+                running_loss = 0.0
+
+        avg_loss = sum(losses) / len(losses)
+        scheduler.step(avg_loss)
+
+    print('Training Done')
+
+def reset_weights(m):
+  for layer in m.children():
+   if hasattr(layer, 'reset_parameters'):
+    print(f'Reset trainable parameters of layer = {layer}')
+    layer.reset_parameters()
+
+def cross_validation_classifier(training_data):
+    # Apply Transforms
+    transform_train = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomRotation(30),
+        transforms.ToTensor(),
+    ])
+
+    train_dataset = Dataset(training_data, transform_train)
+
+    # Define the number of folds, batch size and loss function
+    k_folds = 5
     batch_size = 64
+    loss_function = nn.CrossEntropyLoss()
+
+    # For fold results
+    results = {}
+
+    # Set fixed random number seed
+    torch.manual_seed(42)
 
     # Define the device (CPU or GPU)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize the k-fold cross validation
     kf = KFold(n_splits=k_folds, shuffle=True)
@@ -53,38 +119,80 @@ def training_classifier(training_data):
         )
 
         # Initialize the model and optimizer
-        model = ResNet.ResNet50(10, 1).to(device)
+        # model = ResNet.ResNet50(10, 1).to(device)
+        model = ResNet.ResNet50(10, 1)
         optimizer = optim.Adam(model.parameters(), lr=0.01)
 
         # Train the model on the current fold
-        for epoch in range(1, 11):
-            # train(model, device, train_loader, optimizer, epoch)
-            for batch_idx, (data, target) in enumerate(train_loader):
-                data, target = data.to(device), target.to(device)
+        for epoch in range(0, 10):
+            # Print epoch
+            print(f'Starting epoch {epoch + 1}')
+
+            # Set current loss value
+            current_loss = 0.0
+            for i, data in enumerate(train_loader):
+                # data, target = data.to(device), target.to(device)
+
+                # Get inputs
+                inputs, targets = data
+
+                # Zero the gradients
                 optimizer.zero_grad()
-                output = model(data)
-                loss = nn.functional.nll_loss(output, target)
+
+                # Perform forward pass
+                outputs = model(inputs)
+
+                # Compute loss
+                loss = loss_function(outputs, targets)
+
+                # Perform backward pass
                 loss.backward()
+
+                # Perform optimization
                 optimizer.step()
 
-        # Evaluate the model on the test set
-        model.eval()
-        test_loss = 0
-        correct = 0
+                # Print statistics
+                current_loss += loss.item()
+                if i % 500 == 499:
+                    print('Loss after mini-batch %5d: %.3f' %
+                          (i + 1, current_loss / 500))
+                    current_loss = 0.0
+
+        # Process is complete.
+        print('Training process has finished. Saving trained model.')
+
+        # Print about testing
+        print('Starting testing')
+
+        # Evaluation for this fold
+        correct, total = 0, 0
         with torch.no_grad():
-            for data, target in test_loader:
-                data, target = data.to(device), target.to(device)
-                output = model(data)
-                test_loss += nn.functional.nll_loss(output, target, reduction="sum").item()
-                pred = output.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
+            for i, data in enumerate(test_loader, 0):
+                # Get inputs
+                inputs, targets = data
 
-        test_loss /= len(test_loader.dataset)
-        accuracy = 100.0 * correct / len(test_loader.dataset)
+                # Generate outputs
+                outputs = model(inputs)
 
-        # Print the results for the current fold
-        print(
-            f"Test set: Avg loss: {test_loss:.4f}, Accuracy: {correct}/{len(test_loader.dataset)} ({accuracy:.2f}%)\n")
+                # Set total and correct
+                _, predicted = torch.max(outputs.data, 1)
+                total += targets.size(0)
+                correct += (predicted == targets).sum().item()
+
+            # Print accuracy
+            print('Accuracy for fold %d: %d %%' % (fold, 100.0 * correct / total))
+            print('--------------------------------')
+            results[fold] = 100.0 * (correct / total)
+
+    # Print fold results
+    print(f'K-FOLD CROSS VALIDATION RESULTS FOR {k_folds} FOLDS')
+    print('--------------------------------')
+    final_sum = 0.0
+    for key, value in results.items():
+        print(f'Fold {key}: {value} %')
+        final_sum += value
+    print(f'Average: {final_sum / len(results.items())} %')
+
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -285,7 +393,7 @@ if __name__ == '__main__':
     train, test = raw_data.split_data()
 
     # Train Classifier
-    training_classifier(train)
+    cross_validation_classifier(train)
 
     # Train DCGAN
     # training_dcgan(train)
