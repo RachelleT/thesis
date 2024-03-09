@@ -1,4 +1,4 @@
-from random import random
+import random
 from Models.dcgan import Generator, Discriminator
 from Preprocessing.preprocessing import Preprocessing
 from Preprocessing.dataset import Dataset
@@ -253,7 +253,7 @@ def training_dcgan(training_data):
         transforms.Resize(image_size),
         transforms.CenterCrop(image_size),
         transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        transforms.Normalize((0.5), (0.5)),
     ])
 
     train_dataset = Dataset(training_data, transform_train)
@@ -395,7 +395,7 @@ if __name__ == '__main__':
     train, test = raw_data.split_data()
 
     # Train Classifier
-    cross_validation_classifier(train)
+    #cross_validation_classifier(train)
 
     # Train DCGAN
-    # training_dcgan(train)
+    training_dcgan(train)
