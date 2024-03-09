@@ -96,7 +96,7 @@ def cross_validation_classifier(training_data):
     torch.manual_seed(42)
 
     # Define the device (CPU or GPU)
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 
     # Initialize the k-fold cross validation
     kf = KFold(n_splits=k_folds, shuffle=True)
@@ -120,7 +120,7 @@ def cross_validation_classifier(training_data):
 
         # Initialize the model and optimizer
         # model = ResNet.ResNet50(10, 1).to(device)
-        model = ResNet.ResNet50(10, 1)
+        model = ResNet.ResNet50(10, 1).to(device)
         optimizer = optim.Adam(model.parameters(), lr=0.01)
 
         # Train the model on the current fold
@@ -135,6 +135,7 @@ def cross_validation_classifier(training_data):
 
                 # Get inputs
                 inputs, targets = data
+                inputs, targets = inputs.to(device), targets.to(device)
 
                 # Zero the gradients
                 optimizer.zero_grad()
@@ -170,6 +171,7 @@ def cross_validation_classifier(training_data):
             for i, data in enumerate(test_loader, 0):
                 # Get inputs
                 inputs, targets = data
+                inputs, targets = inputs.to(device), targets.to(device)
 
                 # Generate outputs
                 outputs = model(inputs)
