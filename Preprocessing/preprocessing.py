@@ -14,8 +14,8 @@ class Preprocessing:
                 self.data.append([img_path, class_name])
 
     def numbers_generator(self):
-        class_total = [0, 104, 135, 430, 853, 859, 940, 1076, 1139, 1541, 1975]
-        class_split = [10, 3, 30, 42, 1, 8, 14, 6, 60, 23]
+        class_total = [0, 104, 135, 424, 793, 799, 880, 1016, 1079, 1581, 1815]
+        class_split = [10, 3, 29, 37, 1, 8, 14, 6, 50, 23]
         test_index = []
         for i in range(0, len(class_split)):
             random_list = random.sample(range(class_total[i], class_total[i+1]), class_split[i])

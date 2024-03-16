@@ -1,15 +1,21 @@
+from copy import copy
 import random
+
+import numpy as np
+from Models.PGGAN.utils import GradientPenalty, Progress, exp_mov_avg, hypersphere, printProgressBar
 from Models.dcgan import Generator, Discriminator
-from Preprocessing.preprocessing import Preprocessing
+from Preprocessing.preprocessing import Classifier_Preprocessing, GAN_Preprocessing
 from Preprocessing.dataset import Dataset
 from Models.classifier import ResNet
 import torch
+import torchvision
 import torchvision.transforms as transforms
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
 import torchvision.utils as vutils
 from sklearn.model_selection import KFold
+from Models.PGGAN import pggan
 
 
 def training_classifier(training_data):
@@ -33,7 +39,10 @@ def training_classifier(training_data):
         batch_size=batch_size,
     )
 
-    net = ResNet.ResNet50(10, 1)
+    # Define the device (CPU or GPU)
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+
+    net = ResNet.ResNet50(10, 1).to(device)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=0.0001)
@@ -44,8 +53,9 @@ def training_classifier(training_data):
         losses = []
         running_loss = 0
         for i, inp in enumerate(train_loader):
+            
             inputs, labels = inp
-            # inputs, labels = inputs, labels
+            inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
 
             outputs = net(inputs)
@@ -65,12 +75,6 @@ def training_classifier(training_data):
         scheduler.step(avg_loss)
 
     print('Training Done')
-
-def reset_weights(m):
-  for layer in m.children():
-   if hasattr(layer, 'reset_parameters'):
-    print(f'Reset trainable parameters of layer = {layer}')
-    layer.reset_parameters()
 
 def cross_validation_classifier(training_data):
     # Apply Transforms
@@ -104,7 +108,7 @@ def cross_validation_classifier(training_data):
     # Loop through each fold
     for fold, (train_idx, test_idx) in enumerate(kf.split(train_dataset)):
         print(f"Fold {fold + 1}")
-        print("-------")
+        print("----------")
 
         # Define the data loaders for the current fold
         train_loader = DataLoader(
@@ -119,19 +123,17 @@ def cross_validation_classifier(training_data):
         )
 
         # Initialize the model and optimizer
-        # model = ResNet.ResNet50(10, 1).to(device)
         model = ResNet.ResNet50(10, 1).to(device)
         optimizer = optim.Adam(model.parameters(), lr=0.01)
 
         # Train the model on the current fold
-        for epoch in range(0, 10):
+        for epoch in range(0, 200):
             # Print epoch
-            print(f'Starting epoch {epoch + 1}')
+            #print(f'Starting epoch {epoch + 1}')
 
             # Set current loss value
             current_loss = 0.0
             for i, data in enumerate(train_loader):
-                # data, target = data.to(device), target.to(device)
 
                 # Get inputs
                 inputs, targets = data
@@ -182,9 +184,9 @@ def cross_validation_classifier(training_data):
                 correct += (predicted == targets).sum().item()
 
             # Print accuracy
-            print('Accuracy for fold %d: %d %%' % (fold, 100.0 * correct / total))
+            print('Accuracy for fold %d: %d %%' % (fold + 1, 100.0 * correct / total))
             print('--------------------------------')
-            results[fold] = 100.0 * (correct / total)
+            results[fold + 1] = 100.0 * (correct / total)
 
     # Print fold results
     print(f'K-FOLD CROSS VALIDATION RESULTS FOR {k_folds} FOLDS')
@@ -206,7 +208,7 @@ def weights_init(m):
 
 def training_dcgan(training_data):
     # Set random seed for reproducibility
-    manualSeed = 999
+    manualSeed = 42
     # manualSeed = random.randint(1, 10000) # use if you want new results
     print("Random Seed: ", manualSeed)
     random.seed(manualSeed)
@@ -217,7 +219,7 @@ def training_dcgan(training_data):
     workers = 2
 
     # Batch size during training
-    batch_size = 128
+    batch_size = 2
 
     # Spatial size of training images. All images will be resized to this
     #   size using a transformer.
@@ -227,7 +229,7 @@ def training_dcgan(training_data):
     nc = 1
 
     # Size of z latent vector (i.e. size of generator input)
-    nz = 100
+    nz = 256
 
     # Size of feature maps in generator
     ngf = 64
@@ -236,7 +238,7 @@ def training_dcgan(training_data):
     ndf = 64
 
     # Number of training epochs
-    num_epochs = 5
+    num_epochs = 550
 
     # Learning rate for optimizers
     lr = 0.0002
@@ -384,18 +386,188 @@ def training_dcgan(training_data):
                 with torch.no_grad():
                     fake = netG(fixed_noise).detach().cpu()
                 img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
+                torchvision.utils.save_image(vutils.make_grid(fake, padding=2, normalize=True), 'Results/dcgan-' + str(iters) + '.png')
 
             iters += 1
+
+def training_pggan(training_data):
+    
+    # Batch size during training
+    batch_size = 2
+
+    # Number of workers for dataloader
+    workers = 2
+
+    # Number of GPUs available. Use 0 for CPU mode.
+    ngpu = 1
+
+    # Number of channels in the training images. For color images this is 3
+    nc = 1
+
+    # Output resolution
+    max_res = 3 # for 32x32 output
+
+    # use WeightScale in G and D
+    ws = True
+
+    # use BatchNorm in G and D
+    bn = True
+
+    # use PixelNorm in G
+    pn = True
+
+    # base number of channel for networks
+    nch = 64
+
+    # lambda for gradient penalty
+    lambdaGP = 10
+
+    # gamma for gradient penalty
+    gamma = 1
+
+    # number of epochs to train before changing the progress
+    n_iter = 50
+
+    # number of examples images to save
+    savenum = 64
+
+    # epsilon drift for discriminator loss
+    e_drift = 0.001
+
+    transform = transforms.Compose([
+        # resize to 32x32
+        transforms.Pad((2, 2)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,))
+    ])
+
+    train_dataset = Dataset(training_data, transform)
+
+    # Create the dataloader
+    dataloader = DataLoader(train_dataset, batch_size=batch_size,
+                                             shuffle=True, num_workers=workers)
+
+    # Decide which device we want to run on
+    device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
+
+    # Model creation and init
+    G = pggan.Generator(max_res, nch, nc, bn=True, ws=True, pn=True).to(device)
+    D = pggan.Discriminator(max_res, nch, nc, bn=True, ws=True).to(device)
+
+    if not ws:
+    # weights are initialized by WScale layers to normal if WS is used
+        G.apply(weights_init)
+        D.apply(weights_init)
+    Gs = copy.deepcopy(G)
+
+    optimizerG = optim.Adam(G.parameters(), lr=1e-3, betas=(0, 0.99))
+    optimizerD = optim.Adam(D.parameters(), lr=1e-3, betas=(0, 0.99))
+
+    GP = GradientPenalty(batch_size, lambdaGP, gamma, device)
+
+    epoch = 0
+    global_step = 0
+    total = 2
+
+    P = Progress(n_iter, max_res, batch_size)
+
+    P.progress(epoch, 1, total)
+    GP.batchSize = P.batchSizer
+
+    lossEpochG = []
+    lossEpochD = []
+    lossEpochD_W = []
+
+    for i, (images, _) in enumerate(dataloader):
+        P.progress(epoch, i + 1, total + 1)
+        global_step += 1
+
+        # Build mini-batch
+        images = images.to(device)
+        images = P.resize(images)
+
+        # ============= Train the discriminator =============#
+
+        # zeroing gradients in D
+        D.zero_grad()
+        # compute fake images with G
+        z = hypersphere(torch.randn(P.batchSize, nch * 32, 1, 1, device))
+        with torch.no_grad():
+            fake_images = G(z, P.p)
+
+        # compute scores for real images
+        D_real = D(images, P.p)
+        D_realm = D_real.mean()
+
+        # compute scores for fake images
+        D_fake = D(fake_images, P.p)
+        D_fakem = D_fake.mean()
+
+        # compute gradient penalty for WGAN-GP as defined in the article
+        gradient_penalty = GP(D, images.data, fake_images.data, P.p)
+
+        # prevent D_real from drifting too much from 0
+        drift = (D_real ** 2).mean() * e_drift
+
+        # Backprop + Optimize
+        d_loss = D_fakem - D_realm
+        d_loss_W = d_loss + gradient_penalty + drift
+        d_loss_W.backward()
+        optimizerD.step()
+
+        lossEpochD.append(d_loss.item())
+        lossEpochD_W.append(d_loss_W.item())
+
+        # =============== Train the generator ===============#
+
+        G.zero_grad()
+
+        z = hypersphere(torch.randn(P.batchSize, nch * 32, 1, 1, device))
+        fake_images = G(z, P.p)
+        # compute scores with new fake images
+        G_fake = D(fake_images, P.p)
+        G_fakem = G_fake.mean()
+        # no need to compute D_real as it does not affect G
+        g_loss = -G_fakem
+
+        # Optimize
+        g_loss.backward()
+        optimizerG.step()
+
+        lossEpochG.append(g_loss.item())
+
+        # update Gs with exponential moving average
+        exp_mov_avg(Gs, G, alpha=0.999, global_step=global_step)
+
+        printProgressBar(i + 1, total + 1,
+                         length=20,
+                         prefix=f'Epoch {epoch} ',
+                         suffix=f', d_loss: {d_loss.item():.3f}'
+                                f', d_loss_W: {d_loss_W.item():.3f}'
+                                f', GP: {gradient_penalty.item():.3f}'
+                                f', progress: {P.p:.2f}')
 
 
 if __name__ == '__main__':
 
-    # Preprocessing
-    raw_data = Preprocessing()
+    # Preprocessing - Classifier
+    raw_data = Classifier_Preprocessing()
     train, test = raw_data.split_data()
 
     # Train Classifier
-    #cross_validation_classifier(train)
+    # cross_validation_classifier(train)
+    # training_classifier(train)
+
+    # Pretraining - GAN
+    classes = ["aneurysmatic bone cyst", "chondroblastoma", "chondrosarcoma",
+                          "enchondroma", "ewing sarcoma", "fibruous dysplasia",
+                          "giant cell tumour", "non-ossifying fibroma", "osteochondroma",
+                          "osteosarcoma"]
+    gan_data = GAN_Preprocessing(classes[8])
+    train_gan = gan_data.class_data()
 
     # Train DCGAN
-    training_dcgan(train)
+    # training_dcgan(train_gan)
+
+    # Train PGGAN
+    #training_pggan(train_gan)
