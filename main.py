@@ -1,8 +1,6 @@
-from copy import copy
+from copy import deepcopy
 import random
-
-import numpy as np
-from Models.PGGAN.utils import GradientPenalty, Progress, exp_mov_avg, hypersphere, printProgressBar
+from utils import GradientPenalty, Progress, exp_mov_avg, hypersphere
 from Models.dcgan import Generator, Discriminator
 from Preprocessing.preprocessing import Classifier_Preprocessing, GAN_Preprocessing
 from Preprocessing.dataset import Dataset
@@ -14,8 +12,10 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
 import torchvision.utils as vutils
+from torch.backends import cudnn
+import torch.nn.functional as F
 from sklearn.model_selection import KFold
-from Models.PGGAN import pggan
+from Models import pggan
 
 
 def training_classifier(training_data):
@@ -45,15 +45,17 @@ def training_classifier(training_data):
     net = ResNet.ResNet50(10, 1).to(device)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=0.0001)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=5)
+    optimizer = optim.SGD(net.parameters(), lr=0.1,
+                          momentum=0.9, weight_decay=0.0001)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, factor=0.1, patience=5)
 
     EPOCHS = 200
     for epoch in range(EPOCHS):
         losses = []
         running_loss = 0
         for i, inp in enumerate(train_loader):
-            
+
             inputs, labels = inp
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
@@ -68,13 +70,15 @@ def training_classifier(training_data):
             running_loss += loss.item()
 
             if i % 100 == 0 and i > 0:
-                print(f'Loss [{epoch + 1}, {i}](epoch, minibatch): ', running_loss / 100)
+                print(
+                    f'Loss [{epoch + 1}, {i}](epoch, minibatch): ', running_loss / 100)
                 running_loss = 0.0
 
         avg_loss = sum(losses) / len(losses)
         scheduler.step(avg_loss)
 
     print('Training Done')
+
 
 def cross_validation_classifier(training_data):
     # Apply Transforms
@@ -129,7 +133,7 @@ def cross_validation_classifier(training_data):
         # Train the model on the current fold
         for epoch in range(0, 200):
             # Print epoch
-            #print(f'Starting epoch {epoch + 1}')
+            # print(f'Starting epoch {epoch + 1}')
 
             # Set current loss value
             current_loss = 0.0
@@ -184,7 +188,8 @@ def cross_validation_classifier(training_data):
                 correct += (predicted == targets).sum().item()
 
             # Print accuracy
-            print('Accuracy for fold %d: %d %%' % (fold + 1, 100.0 * correct / total))
+            print('Accuracy for fold %d: %d %%' %
+                  (fold + 1, 100.0 * correct / total))
             print('--------------------------------')
             results[fold + 1] = 100.0 * (correct / total)
 
@@ -205,6 +210,7 @@ def weights_init(m):
     elif classname.find('BatchNorm') != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
+
 
 def training_dcgan(training_data):
     # Set random seed for reproducibility
@@ -262,10 +268,11 @@ def training_dcgan(training_data):
 
     # Create the dataloader
     dataloader = DataLoader(train_dataset, batch_size=batch_size,
-                                             shuffle=True, num_workers=workers)
+                            shuffle=True, num_workers=workers)
 
     # Decide which device we want to run on
-    device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
+    device = torch.device("cuda:0" if (
+        torch.cuda.is_available() and ngpu > 0) else "cpu")
 
     # Create the generator
     netG = Generator(ngpu, nz, ngf, nc).to(device)
@@ -324,12 +331,13 @@ def training_dcgan(training_data):
             ############################
             # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
             ###########################
-            ## Train with all-real batch
+            # Train with all-real batch
             netD.zero_grad()
             # Format batch
             real_cpu = data[0].to(device)
             b_size = real_cpu.size(0)
-            label = torch.full((b_size,), real_label, dtype=torch.float, device=device)
+            label = torch.full((b_size,), real_label,
+                               dtype=torch.float, device=device)
             # Forward pass real batch through D
             output = netD(real_cpu).view(-1)
             # Calculate loss on all-real batch
@@ -338,7 +346,7 @@ def training_dcgan(training_data):
             errD_real.backward()
             D_x = output.mean().item()
 
-            ## Train with all-fake batch
+            # Train with all-fake batch
             # Generate batch of latent vectors
             noise = torch.randn(b_size, nz, 1, 1, device=device)
             # Generate fake image batch with G
@@ -385,15 +393,18 @@ def training_dcgan(training_data):
             if (iters % 500 == 0) or ((epoch == num_epochs - 1) and (i == len(dataloader) - 1)):
                 with torch.no_grad():
                     fake = netG(fixed_noise).detach().cpu()
-                img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
-                torchvision.utils.save_image(vutils.make_grid(fake, padding=2, normalize=True), 'Results/dcgan-' + str(iters) + '.png')
+                img_list.append(vutils.make_grid(
+                    fake, padding=2, normalize=True))
+                torchvision.utils.save_image(vutils.make_grid(
+                    fake, padding=2, normalize=True), 'Results/dcgan-' + str(iters) + '.png')
 
             iters += 1
 
+
 def training_pggan(training_data):
-    
+
     # Batch size during training
-    batch_size = 2
+    batch_sizes = [2, 2, 2, 2]
 
     # Number of workers for dataloader
     workers = 2
@@ -405,7 +416,7 @@ def training_pggan(training_data):
     nc = 1
 
     # Output resolution
-    max_res = 3 # for 32x32 output
+    max_res = 3  # for 32x32 output
 
     # use WeightScale in G and D
     ws = True
@@ -428,13 +439,20 @@ def training_pggan(training_data):
     # number of epochs to train before changing the progress
     n_iter = 50
 
-    # number of examples images to save
-    savenum = 64
-
     # epsilon drift for discriminator loss
     e_drift = 0.001
 
+    # number of epochs between saving image examples
+    saveimages = 1
+
+    # save sample images at max resolution instead of real resolution
+    savemaxsize = True
+
+    # number of examples images to save
+    savenum = 64
+
     transform = transforms.Compose([
+        transforms.ToPILImage(),
         # resize to 32x32
         transforms.Pad((2, 2)),
         transforms.ToTensor(),
@@ -443,109 +461,147 @@ def training_pggan(training_data):
 
     train_dataset = Dataset(training_data, transform)
 
-    # Create the dataloader
-    dataloader = DataLoader(train_dataset, batch_size=batch_size,
-                                             shuffle=True, num_workers=workers)
-
     # Decide which device we want to run on
-    device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
+    device = torch.device("cuda:0" if (
+        torch.cuda.is_available() and ngpu > 0) else "cpu")
 
     # Model creation and init
-    G = pggan.Generator(max_res, nch, nc, bn=True, ws=True, pn=True).to(device)
-    D = pggan.Discriminator(max_res, nch, nc, bn=True, ws=True).to(device)
+    G = pggan.Generator(max_res, nch, nc, bn, ws, pn).to(device)
+    D = pggan.Discriminator(max_res, nch, nc, bn, ws).to(device)
 
     if not ws:
-    # weights are initialized by WScale layers to normal if WS is used
+        # weights are initialized by WScale layers to normal if WS is used
         G.apply(weights_init)
         D.apply(weights_init)
-    Gs = copy.deepcopy(G)
+
+    Gs = deepcopy(G)
+    # Gs = copy.deepcopy(G)
 
     optimizerG = optim.Adam(G.parameters(), lr=1e-3, betas=(0, 0.99))
     optimizerD = optim.Adam(D.parameters(), lr=1e-3, betas=(0, 0.99))
 
-    GP = GradientPenalty(batch_size, lambdaGP, gamma, device)
+    GP = GradientPenalty(batch_sizes[0], lambdaGP, gamma, device)
 
     epoch = 0
     global_step = 0
     total = 2
 
-    P = Progress(n_iter, max_res, batch_size)
+    P = Progress(n_iter, max_res, batch_sizes)
+    z_save = hypersphere(torch.randn(savenum, nch * 32, 1, 1, device=device))
 
     P.progress(epoch, 1, total)
-    GP.batchSize = P.batchSizer
+    GP.batchSize = P.batchSize
+
+    # Create the dataloader
+    dataloader = DataLoader(train_dataset, batch_size=P.batchSize, shuffle=True, num_workers=workers,
+                            drop_last=True, pin_memory=True)
 
     lossEpochG = []
     lossEpochD = []
     lossEpochD_W = []
 
-    for i, (images, _) in enumerate(dataloader):
-        P.progress(epoch, i + 1, total + 1)
-        global_step += 1
+    while True:
 
-        # Build mini-batch
-        images = images.to(device)
-        images = P.resize(images)
+        G.train()
+        cudnn.benchmark = True
 
-        # ============= Train the discriminator =============#
+        P.progress(epoch, 1, total)
 
-        # zeroing gradients in D
-        D.zero_grad()
-        # compute fake images with G
-        z = hypersphere(torch.randn(P.batchSize, nch * 32, 1, 1, device))
-        with torch.no_grad():
+        if P.batchSize != dataloader.batch_size:
+            # update batch-size in gradient penalty
+            GP.batchSize = P.batchSize
+            # modify DataLoader at each change in resolution to vary the batch-size as the resolution increases
+            dataloader = DataLoader(train_dataset,
+                                    batch_size=P.batchSize,
+                                    shuffle=True,
+                                    num_workers=workers,
+                                    drop_last=True,
+                                    pin_memory=True)
+
+        total = len(dataloader)
+
+        for i, (images, _) in enumerate(dataloader):
+            P.progress(epoch, i + 1, total + 1)
+            global_step += 1
+
+            # Build mini-batch
+            images = images.to(device)
+            images = P.resize(images)
+
+            # ============= Train the discriminator =============#
+
+            # zeroing gradients in D
+            D.zero_grad()
+            # compute fake images with G
+            z = hypersphere(torch.randn(
+                P.batchSize, nch * 32, 1, 1, device=device))
+            with torch.no_grad():
+                fake_images = G(z, P.p)
+
+            # compute scores for real images
+            D_real = D(images, P.p)
+            D_realm = D_real.mean()
+
+            # compute scores for fake images
+            D_fake = D(fake_images, P.p)
+            D_fakem = D_fake.mean()
+
+            # compute gradient penalty for WGAN-GP as defined in the article
+            gradient_penalty = GP(D, images.data, fake_images.data, P.p)
+
+            # prevent D_real from drifting too much from 0
+            drift = (D_real ** 2).mean() * e_drift
+
+            # Backprop + Optimize
+            d_loss = D_fakem - D_realm
+            d_loss_W = d_loss + gradient_penalty + drift
+            d_loss_W.backward()
+            optimizerD.step()
+
+            lossEpochD.append(d_loss.item())
+            lossEpochD_W.append(d_loss_W.item())
+
+            # =============== Train the generator ===============#
+
+            G.zero_grad()
+
+            z = hypersphere(torch.randn(
+                P.batchSize, nch * 32, 1, 1, device=device))
             fake_images = G(z, P.p)
+            # compute scores with new fake images
+            G_fake = D(fake_images, P.p)
+            G_fakem = G_fake.mean()
+            # no need to compute D_real as it does not affect G
+            g_loss = -G_fakem
 
-        # compute scores for real images
-        D_real = D(images, P.p)
-        D_realm = D_real.mean()
+            # Optimize
+            g_loss.backward()
+            optimizerG.step()
 
-        # compute scores for fake images
-        D_fake = D(fake_images, P.p)
-        D_fakem = D_fake.mean()
+            lossEpochG.append(g_loss.item())
 
-        # compute gradient penalty for WGAN-GP as defined in the article
-        gradient_penalty = GP(D, images.data, fake_images.data, P.p)
+            # update Gs with exponential moving average
+            exp_mov_avg(Gs, G, alpha=0.999, global_step=global_step)
 
-        # prevent D_real from drifting too much from 0
-        drift = (D_real ** 2).mean() * e_drift
+            print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_Dw: %.4f\tGP: %.4f\tProgress: %.4f'
+                % (epoch, total, i+1, len(dataloader),
+                    d_loss.item(), d_loss_W.item(), gradient_penalty.item(), P.p))
+        
+        cudnn.benchmark = False
+        if not (epoch + 1) % saveimages:
+            
+            # Save sampled images with Gs
+            Gs.eval()
 
-        # Backprop + Optimize
-        d_loss = D_fakem - D_realm
-        d_loss_W = d_loss + gradient_penalty + drift
-        d_loss_W.backward()
-        optimizerD.step()
-
-        lossEpochD.append(d_loss.item())
-        lossEpochD_W.append(d_loss_W.item())
-
-        # =============== Train the generator ===============#
-
-        G.zero_grad()
-
-        z = hypersphere(torch.randn(P.batchSize, nch * 32, 1, 1, device))
-        fake_images = G(z, P.p)
-        # compute scores with new fake images
-        G_fake = D(fake_images, P.p)
-        G_fakem = G_fake.mean()
-        # no need to compute D_real as it does not affect G
-        g_loss = -G_fakem
-
-        # Optimize
-        g_loss.backward()
-        optimizerG.step()
-
-        lossEpochG.append(g_loss.item())
-
-        # update Gs with exponential moving average
-        exp_mov_avg(Gs, G, alpha=0.999, global_step=global_step)
-
-        printProgressBar(i + 1, total + 1,
-                         length=20,
-                         prefix=f'Epoch {epoch} ',
-                         suffix=f', d_loss: {d_loss.item():.3f}'
-                                f', d_loss_W: {d_loss_W.item():.3f}'
-                                f', GP: {gradient_penalty.item():.3f}'
-                                f', progress: {P.p:.2f}')
+            with torch.no_grad():
+                fake_images = Gs(z_save, P.p)
+                if savemaxsize:
+                    if fake_images.size(-1) != 4 * 2 ** max_res:
+                        fake_images = F.interpolate(fake_images, 4 * 2 ** max_res, mode='nearest')
+            torchvision.utils.save_image(vutils.make_grid(
+                    fake_images, nrow=8, padding=0, normalize=True), 'Results/pggan-' + str(epoch) + '.png')
+        
+        epoch += 1
 
 
 if __name__ == '__main__':
@@ -560,9 +616,9 @@ if __name__ == '__main__':
 
     # Pretraining - GAN
     classes = ["aneurysmatic bone cyst", "chondroblastoma", "chondrosarcoma",
-                          "enchondroma", "ewing sarcoma", "fibruous dysplasia",
-                          "giant cell tumour", "non-ossifying fibroma", "osteochondroma",
-                          "osteosarcoma"]
+               "enchondroma", "ewing sarcoma", "fibruous dysplasia",
+               "giant cell tumour", "non-ossifying fibroma", "osteochondroma",
+               "osteosarcoma"]
     gan_data = GAN_Preprocessing(classes[8])
     train_gan = gan_data.class_data()
 
@@ -570,4 +626,4 @@ if __name__ == '__main__':
     # training_dcgan(train_gan)
 
     # Train PGGAN
-    #training_pggan(train_gan)
+    training_pggan(train_gan)

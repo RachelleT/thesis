@@ -1,7 +1,30 @@
 from math import ceil
 import torch.nn.functional as F
-from layers import *
+import torch.nn as nn
+from collections import OrderedDict
+import torch
 
+def conv(nin, nout, kernel_size=3, stride=1, padding=1, layer=nn.Conv2d,
+         ws=False, bn=False, pn=False, activ=None, gainWS=2):
+    conv = layer(nin, nout, kernel_size, stride=stride, padding=padding, bias=False if bn else True)
+    layers = OrderedDict()
+
+    if ws:
+        layers['ws'] = WScaleLayer(conv, gain=gainWS)
+
+    layers['conv'] = conv
+
+    if bn:
+        layers['bn'] = nn.BatchNorm2d(nout)
+    if activ:
+        if activ == nn.PReLU:
+            # to avoid sharing the same parameter, activ must be set to nn.PReLU (without '()') and initialized here
+            layers['activ'] = activ(num_parameters=1)
+        else:
+            layers['activ'] = activ
+    if pn:
+        layers['pn'] = PixelNormLayer()
+    return nn.Sequential(layers)
 
 class Generator(nn.Module):
     def __init__(self, max_res=8, nch=16, nc=1, bn=False, ws=False, pn=False, activ=nn.LeakyReLU(0.2)):
@@ -62,7 +85,7 @@ class Generator(nn.Module):
         y0 = y1
 
         for i in range(1, int(ceil(progress) + 1)):
-            y1 = F.upsample(y1, scale_factor=2)
+            y1 = F.interpolate(y1, scale_factor=2, mode='nearest')
             y0 = y1
             y1 = self.blocks[i](y0)
 
@@ -141,3 +164,27 @@ class Discriminator(nn.Module):
         y = self.blocks[0](torch.cat((y0, self.minibatchstd(y0).expand_as(y0[:, 0].unsqueeze(1))), dim=1))
 
         return y.squeeze()
+
+class PixelNormLayer(nn.Module):
+    def __init__(self):
+        super(PixelNormLayer, self).__init__()
+
+    def forward(self, x):
+        return x * torch.rsqrt(torch.mean(x ** 2, dim=1, keepdim=True) + 1e-8)
+
+    def __repr__(self):
+        return self.__class__.__name__
+
+
+class WScaleLayer(nn.Module):
+    def __init__(self, incoming, gain=2):
+        super(WScaleLayer, self).__init__()
+
+        self.gain = gain
+        self.scale = (self.gain / incoming.weight[0].numel()) ** 0.5
+
+    def forward(self, input):
+        return input * self.scale
+
+    def __repr__(self):
+        return '{}(gain={})'.format(self.__class__.__name__, self.gain)
