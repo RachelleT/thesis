@@ -1,6 +1,6 @@
 from copy import deepcopy
 import random
-from utils import GradientPenalty, Progress, exp_mov_avg, hypersphere
+from eval import compute_metrics
 from Models.dcgan import Generator, Discriminator
 from Preprocessing.preprocessing import Classifier_Preprocessing, GAN_Preprocessing
 from Preprocessing.dataset import Dataset
@@ -9,13 +9,15 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torch.optim as optim
 import torchvision.utils as vutils
 from torch.backends import cudnn
-import torch.nn.functional as F
 from sklearn.model_selection import KFold
 from Models import pggan
+from datetime import datetime
+from utils import GradientPenalty, Progress, exp_mov_avg, hypersphere
 
 
 def training_classifier(training_data):
@@ -225,11 +227,11 @@ def training_dcgan(training_data):
     workers = 2
 
     # Batch size during training
-    batch_size = 2
+    batch_size = 8
 
     # Spatial size of training images. All images will be resized to this
     #   size using a transformer.
-    image_size = 64
+    image_size = 128
 
     # Number of channels in the training images. For color images this is 3
     nc = 1
@@ -244,7 +246,7 @@ def training_dcgan(training_data):
     ndf = 64
 
     # Number of training epochs
-    num_epochs = 550
+    num_epochs = 1
 
     # Learning rate for optimizers
     lr = 0.0002
@@ -319,9 +321,13 @@ def training_dcgan(training_data):
 
     # Lists to keep track of progress
     img_list = []
+    img_list_only = []
     G_losses = []
     D_losses = []
     iters = 0
+
+    # current time stamp
+    start = datetime.now()
 
     print("Starting Training Loop...")
     # For each epoch
@@ -395,16 +401,26 @@ def training_dcgan(training_data):
                     fake = netG(fixed_noise).detach().cpu()
                 img_list.append(vutils.make_grid(
                     fake, padding=2, normalize=True))
-                torchvision.utils.save_image(vutils.make_grid(
-                    fake, padding=2, normalize=True), 'Results/dcgan-' + str(iters) + '.png')
+                img_list_only.append(fake)
 
             iters += 1
 
+    end = datetime.now()
+    td = (end - start).total_seconds() * 10**3
+    print(f"The time of execution of above program is : {td:.03f}ms")
+
+    real_batch = next(iter(dataloader))
+    # torchvision.utils.save_image(vutils.make_grid(real_batch[0].to(device)[:64], padding=5, normalize=True).cpu(), 'Results/dcgan-real.png')
+    torchvision.utils.save_image(img_list[-1], 'Results/dcgan-fake-grid.png')
+    torchvision.utils.save_image(
+        img_list_only[-1], 'Results/dcgan-fake-image.png')
+
+    # compute_metrics(real=real_batch, fakes=img_list_only, size=image_size)
 
 def training_pggan(training_data):
 
     # Batch size during training
-    batch_sizes = [2, 2, 2, 2]
+    batch_sizes = [8, 8, 8, 8, 8, 8]
 
     # Number of workers for dataloader
     workers = 2
@@ -416,7 +432,7 @@ def training_pggan(training_data):
     nc = 1
 
     # Output resolution
-    max_res = 3  # for 32x32 output
+    max_res = 5
 
     # use WeightScale in G and D
     ws = True
@@ -428,7 +444,7 @@ def training_pggan(training_data):
     pn = True
 
     # base number of channel for networks
-    nch = 64
+    nch = 8
 
     # lambda for gradient penalty
     lambdaGP = 10
@@ -437,13 +453,13 @@ def training_pggan(training_data):
     gamma = 1
 
     # number of epochs to train before changing the progress
-    n_iter = 50
+    n_iter = 850
 
     # epsilon drift for discriminator loss
     e_drift = 0.001
 
     # number of epochs between saving image examples
-    saveimages = 1
+    saveimages = 200
 
     # save sample images at max resolution instead of real resolution
     savemaxsize = True
@@ -453,8 +469,6 @@ def training_pggan(training_data):
 
     transform = transforms.Compose([
         transforms.ToPILImage(),
-        # resize to 32x32
-        transforms.Pad((2, 2)),
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,))
     ])
@@ -475,7 +489,6 @@ def training_pggan(training_data):
         D.apply(weights_init)
 
     Gs = deepcopy(G)
-    # Gs = copy.deepcopy(G)
 
     optimizerG = optim.Adam(G.parameters(), lr=1e-3, betas=(0, 0.99))
     optimizerD = optim.Adam(D.parameters(), lr=1e-3, betas=(0, 0.99))
@@ -533,8 +546,7 @@ def training_pggan(training_data):
             # zeroing gradients in D
             D.zero_grad()
             # compute fake images with G
-            z = hypersphere(torch.randn(
-                P.batchSize, nch * 32, 1, 1, device=device))
+            z = hypersphere(torch.randn(P.batchSize, nch * 32, 1, 1, device=device))
             with torch.no_grad():
                 fake_images = G(z, P.p)
 
@@ -565,8 +577,7 @@ def training_pggan(training_data):
 
             G.zero_grad()
 
-            z = hypersphere(torch.randn(
-                P.batchSize, nch * 32, 1, 1, device=device))
+            z = hypersphere(torch.randn(P.batchSize, nch * 32, 1, 1, device=device))
             fake_images = G(z, P.p)
             # compute scores with new fake images
             G_fake = D(fake_images, P.p)
@@ -583,12 +594,11 @@ def training_pggan(training_data):
             # update Gs with exponential moving average
             exp_mov_avg(Gs, G, alpha=0.999, global_step=global_step)
 
-            print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_Dw: %.4f\tGP: %.4f\tProgress: %.4f'
-                % (epoch, total, i+1, len(dataloader),
-                    d_loss.item(), d_loss_W.item(), gradient_penalty.item(), P.p))
+            print('Epoch: %d\tLoss_D: %.4f\tLoss_Dw: %.4f\tGP: %.4f\tProgress: %.4f'
+                % (epoch, d_loss.item(), d_loss_W.item(), gradient_penalty.item(), P.p))
         
         cudnn.benchmark = False
-        if not (epoch + 1) % saveimages:
+        if (epoch + 1) % saveimages == 0:
             
             # Save sampled images with Gs
             Gs.eval()
@@ -599,7 +609,7 @@ def training_pggan(training_data):
                     if fake_images.size(-1) != 4 * 2 ** max_res:
                         fake_images = F.interpolate(fake_images, 4 * 2 ** max_res, mode='nearest')
             torchvision.utils.save_image(vutils.make_grid(
-                    fake_images, nrow=8, padding=0, normalize=True), 'Results/pggan-' + str(epoch) + '.png')
+                    fake_images, nrow=8, padding=0, normalize=True), 'Results/pggan-' + str(epoch + 1) + '.png')
         
         epoch += 1
 
