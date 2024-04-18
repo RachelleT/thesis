@@ -1,10 +1,9 @@
 import glob
 import random
 
-
-class Preprocessing:
+class Classifier_Preprocessing:
     def __init__(self):
-        self.images_path = "Data/"
+        self.images_path = "Entities/"
         file_list = glob.glob(self.images_path + "*")
         files = sorted(file_list)
         self.data = []
@@ -36,5 +35,31 @@ class Preprocessing:
                 train.append(self.data[i])
         return train, test
 
+        
+class GAN_Entities:
+    def __init__(self, class_name):
+        self.images_path = "Entities/" + class_name
+        files = glob.glob(self.images_path + "*")
+        self.data = []
+        for class_path in files:
+            for img_path in glob.glob(class_path + "/*.png"):
+                self.data.append([img_path, class_name])
+
+    def class_data(self):
+        # print(len(self.data))
+        return self.data
+
+class GAN_Categories:
+    def __init__(self, class_name):
+        self.images_path = "Categories/" + class_name
+        files = glob.glob(self.images_path + "*")
+        self.data = []
+        for class_path in files:
+            for img_path in glob.glob(class_path + "/*.png"):
+                self.data.append([img_path, class_name])
+
+    def class_data(self):
+        print(len(self.data))
+        return self.data
         
 
