@@ -93,7 +93,7 @@ def cross_validation_classifier(training_data):
         transforms.ToTensor(),
     ])
 
-    train_dataset = Entities_Dataset(training_data, transform_train)
+    train_dataset = Categories_Dataset(training_data, transform_train)
 
     # Define the number of folds, batch size and loss function
     k_folds = 5
@@ -253,7 +253,7 @@ def training_dcgan(training_data, images_class):
     ndf = 8
 
     # Number of training epochs
-    num_epochs = 5
+    num_epochs = 3000
 
     # Learning rate for optimizers
     lr = 0.0001 
@@ -408,9 +408,9 @@ def training_dcgan(training_data, images_class):
                 with torch.no_grad():
                     fake = netG(fixed_noise).detach().cpu()
                 img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
-                torchvision.utils.save_image(vutils.make_grid(img_list[-1][0], normalize=True).cpu(), 
-                                            'Results/Categories/' + images_class + '-fake/dcgan-' 
-                                            + str(i+1) + '.png')
+                #torchvision.utils.save_image(vutils.make_grid(img_list[-1][0], normalize=True).cpu(), 
+                #                            'Results/Categories/' + images_class + '-fake/dcgan-' 
+                #                            + str(i+1) + '.png')
                 img_list_only.append(fake)
 
             iters += 1
@@ -423,20 +423,25 @@ def training_dcgan(training_data, images_class):
     torchvision.utils.save_image(vutils.make_grid(real_batch[0].to(device)[:64], 
                                                   padding=5, normalize=True).cpu(), 
                                                   'Results/dcgan-real.png')
+    torchvision.utils.save_image(img_list, 'Results/dcgan-fake.png')
     
-    grid_tensor = vutils.make_grid(fake, padding=2, normalize=True)
-    grid_array = fake.numpy()
-    # Extracting one image from the grid
-    image_index = 0  # Change this index to extract different images
-    single_image = grid_array[:, image_index * (grid_tensor.size(1) + 2): (image_index + 1) * (grid_tensor.size(1) + 2)]
-    torchvision.utils.save_image(vutils.make_grid(single_image, normalize=True).cpu(), 
-                                            'Results/Categories/' + images_class + '-fake/dcgan-' 
+    # Define the normalization transform
+    normalize = transforms.Normalize((0.5), (0.5))
+
+    # Initialize a list to store normalized images
+    normalized_images = []
+
+    # Normalize each generated image and append it to the list
+    for i in range(fake.size(0)):
+        generated_image = fake[i].cpu()  # Ensure the tensor is on CPU
+        normalized_image = normalize(generated_image)  # Apply normalization
+        normalized_images.append(normalized_image)
+
+    # Save each normalized image separately
+    for i, normalized_image in enumerate(normalized_images):
+        vutils.save_image(normalized_image, 'Results/Categories/' + images_class + '-fake/dcgan-' 
                                             + str(i+1) + '.png')
-
-    #for i in range(0, fake.size()[0]):
-    #    img_normalized = transform_norm(fake[i])
-    #    torchvision.utils.save_image(img_normalized, 'Results/Categories/' + images_class + '-fake/dcgan-' + str(i+1) + '.png')
-
+        
     # compute_metrics_old(real=real_batch, fakes=img_list_only, image_size)
 
 def train_pggan(training_data):
@@ -519,14 +524,6 @@ def train_pggan(training_data):
 
 if __name__ == '__main__':
 
-    # Preprocessing - Classifier
-    raw_data = Classifier_Preprocessing()
-    train, test = raw_data.split_data()
-
-    # Train Classifier
-    # cross_validation_classifier(train)
-    # training_classifier(train)
-
     # Pretraining - GAN
     entities_classes = ["aneurysmatic bone cyst", "chondroblastoma", "chondrosarcoma",
                "enchondroma", "ewing sarcoma", "fibruous dysplasia",
@@ -547,3 +544,11 @@ if __name__ == '__main__':
 
     # Train PGGAN
     # train_pggan(train_category)
+
+    # Preprocessing - Classifier
+    raw_data = Classifier_Preprocessing()
+    train, test = raw_data.split_data()
+
+    # Train Classifier
+    cross_validation_classifier(train)
+    # training_classifier(train)
