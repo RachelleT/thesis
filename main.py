@@ -4,7 +4,7 @@ import random
 import torch.utils
 from eval import compute_metrics
 from Models.dcgan import Discriminator_256, Generator_256
-from Preprocessing.preprocessing import Classifier_Preprocessing, GAN_Categories, GAN_Entities
+from Preprocessing.preprocessing import Classifier_Categories, GAN_Categories, GAN_Entities
 from Preprocessing.dataset import Entities_Dataset, Categories_Dataset
 from Models.classifier import ResNet
 import torch
@@ -87,6 +87,7 @@ def cross_validation_classifier(training_data):
     # Apply Transforms
     transform_train = transforms.Compose([
         transforms.ToPILImage(),
+        transforms.Resize((1, 224, 224)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
         transforms.RandomRotation(30),
@@ -234,7 +235,9 @@ def training_dcgan(training_data, images_class):
     workers = 2
 
     # Batch size during training
-    batch_size = 32
+    # batch_size = 16 -> benign
+    # batch_size = 8 -> malignant
+    batch_size = 2
 
     # Spatial size of training images. All images will be resized to this
     #   size using a transformer.
@@ -253,7 +256,9 @@ def training_dcgan(training_data, images_class):
     ndf = 8
 
     # Number of training epochs
-    num_epochs = 3000
+    # num_epochs = 2475 -> benign
+    # num_epochs = 1750 -> malignant
+    num_epochs = 1050
 
     # Learning rate for optimizers
     lr = 0.0001 
@@ -408,9 +413,6 @@ def training_dcgan(training_data, images_class):
                 with torch.no_grad():
                     fake = netG(fixed_noise).detach().cpu()
                 img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
-                #torchvision.utils.save_image(vutils.make_grid(img_list[-1][0], normalize=True).cpu(), 
-                #                            'Results/Categories/' + images_class + '-fake/dcgan-' 
-                #                            + str(i+1) + '.png')
                 img_list_only.append(fake)
 
             iters += 1
@@ -423,24 +425,16 @@ def training_dcgan(training_data, images_class):
     torchvision.utils.save_image(vutils.make_grid(real_batch[0].to(device)[:64], 
                                                   padding=5, normalize=True).cpu(), 
                                                   'Results/dcgan-real.png')
-    torchvision.utils.save_image(img_list, 'Results/dcgan-fake.png')
-    
-    # Define the normalization transform
-    normalize = transforms.Normalize((0.5), (0.5))
 
-    # Initialize a list to store normalized images
-    normalized_images = []
+    # Convert the images to grayscale
+    grayscale_transform = transforms.Grayscale(num_output_channels=1)
 
-    # Normalize each generated image and append it to the list
-    for i in range(fake.size(0)):
-        generated_image = fake[i].cpu()  # Ensure the tensor is on CPU
-        normalized_image = normalize(generated_image)  # Apply normalization
-        normalized_images.append(normalized_image)
+    for i, image in enumerate(img_list_only[-1]):
+        output_image = grayscale_transform(image)
+        vutils.save_image(output_image, 'Results/Categories/' + images_class + '/dcgan-' + str(i+1) + '.png')
 
-    # Save each normalized image separately
-    for i, normalized_image in enumerate(normalized_images):
-        vutils.save_image(normalized_image, 'Results/Categories/' + images_class + '-fake/dcgan-' 
-                                            + str(i+1) + '.png')
+    torchvision.utils.save_image(img_list_only[-1], 'Results/dcgan-fake-image-only.png')
+    torchvision.utils.save_image(img_list[-1], 'Results/dcgan-fake-image-norm.png')
         
     # compute_metrics_old(real=real_batch, fakes=img_list_only, image_size)
 
@@ -536,19 +530,23 @@ if __name__ == '__main__':
 
     categories_classes = ["benign", "intermediate", "malignant"]
 
-    category_data = GAN_Categories(categories_classes[0])
+    category_data = GAN_Categories(categories_classes[1])
     train_category = category_data.class_data()
 
     # Train DCGAN
-    training_dcgan(train_category, categories_classes[0])
+    # training_dcgan(train_category, categories_classes[1])
 
     # Train PGGAN
     # train_pggan(train_category)
 
     # Preprocessing - Classifier
-    raw_data = Classifier_Preprocessing()
-    train, test = raw_data.split_data()
+    # real_data = Classifier_Categories("Categories")
+    # train, test = real_data.split_data()
+
+    # synthetic_data = Classifier_Categories("Results/Categories")
+    # synthetic_train = synthetic_data.class_data()
+    # train = train + synthetic_train
 
     # Train Classifier
-    cross_validation_classifier(train)
+    # cross_validation_classifier(train)
     # training_classifier(train)

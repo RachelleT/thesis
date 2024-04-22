@@ -36,8 +36,8 @@ class Classifier_Entities:
         return train, test
     
 class Classifier_Categories:
-    def __init__(self):
-        self.images_path = "Categories/"
+    def __init__(self, folder):
+        self.images_path = folder + "/"
         file_list = glob.glob(self.images_path + "*")
         files = sorted(file_list)
         self.data = []
@@ -68,6 +68,9 @@ class Classifier_Categories:
             if i not in temp_list:
                 train.append(self.data[i])
         return train, test
+    
+    def class_data(self):
+        return self.data
 
         
 class GAN_Entities:
