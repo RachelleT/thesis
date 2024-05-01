@@ -18,7 +18,7 @@ from sklearn.model_selection import KFold
 from Models import pggan
 from datetime import datetime
 
-from utils import weights_init
+from utils import concat_image, resize_image, save_image, weights_init
 
 
 def training_classifier(training_data):
@@ -439,81 +439,87 @@ def training_dcgan(training_data, images_class):
     # compute_metrics_old(real=real_batch, fakes=img_list_only, image_size)
 
 def train_pggan(training_data):
-    
-    num_epochs = 50
-    latent_dim = 100
-    batch_size = 32
 
+    num_stages = 5
+    num_epochs = 100
+    base_channels = 16
+    batch_size = [32, 32, 32, 32, 32, 16, 8, 4, 2]
+    image_channels = 1
     ngpu = 1
 
-    device = torch.device("cuda:0" if (
-        torch.cuda.is_available() and ngpu > 0) else "cpu")
+    device = torch.device("cuda:2" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
+
+    generator = pggan.Generator(max_stage=num_stages, base_channels=base_channels, image_channels=image_channels).to(device)
+    discriminator = pggan.Discriminator(max_stage=num_stages, base_channels=base_channels, image_channels=image_channels).to(device)
+
+    g_optimizer = optim.Adam(generator.parameters(), lr=1e-3, betas=(0, 0.99))
+    d_optimizer = optim.Adam(discriminator.parameters(), lr=1e-3, betas=(0, 0.99))
+
+    for stage in range(num_stages + 1):
+
+        transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize(4 * 2 ** min(stage, num_stages)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5])])
+        
+        train_dataset = Categories_Dataset(training_data, transform)
     
-    generator = pggan.Generator(latent_dim).to(device)
-    discriminator = pggan.Discriminator().to(device)
+        # Create the dataloader
+        train_loader = DataLoader(train_dataset, batch_size=batch_size[stage], shuffle=True, drop_last=True)
 
-    transform = transforms.Compose([
-        transforms.ToPILImage(),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,))
-    ])
+        gp = pggan.GradientPenalty(batch_size[stage], 10, device)
+        progress = pggan.Progress(num_stages, num_epochs, len(train_loader))
 
-    train_dataset = Categories_Dataset(training_data, transform)
-    
-    # Create the dataloader
-    dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                            num_workers=2)
+        generator.train()
+        discriminator.train()
+        for epoch in range(num_epochs):
+            for i, (real_images,  label) in enumerate(train_loader):
+                real_images = real_images.to(device)
+                progress.progress(stage, epoch, i)
 
-    generator = pggan.Generator(latent_dim).to(device)
-    discriminator = pggan.Discriminator().to(device)
+                # discriminator
+                generator.zero_grad()
+                discriminator.zero_grad()
 
-    criterion = nn.BCELoss()
-    optimizer_G = optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
-    optimizer_D = optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+                latent_dim = min(base_channels * 2 ** num_stages, 512)
+                z = torch.randn(batch_size[stage], latent_dim, 1, 1, device=device)
 
-    real_label = 1
-    fake_label = 0
+                with torch.no_grad():
+                    fake_images = generator(z, progress.alpha, progress.stage)
 
-    for epoch in range(num_epochs):
-        for i, data in enumerate(dataloader):
-            real_images, _ = data
-            batch_size = real_images.size(0)
+                d_real = discriminator(real_images, progress.alpha, progress.stage).mean()
+                d_fake = discriminator(fake_images, progress.alpha, progress.stage).mean()
 
-            # Train Discriminator
-            discriminator.zero_grad()
-            real_images = real_images.to(device)
-            output = discriminator(real_images, 4)
-            label = torch.full((batch_size,), real_label, device=device)
-            errD_real = criterion(output.view(-1), label)
-            errD_real.backward()
-            D_x = output.mean().item()
+                gradient_penalty = gp(discriminator, real_images.data, fake_images.data, progress)
 
-            noise = torch.randn(batch_size, latent_dim, 1, 1, device=device)
-            fake_images = generator(noise, 4)
-            output = discriminator(fake_images.detach(), 4)
-            label.fill_(fake_label)
-            errD_fake = criterion(output.view(-1), label)
-            errD_fake.backward()
-            D_G_z1 = output.mean().item()
-            errD = errD_real + errD_fake
-            optimizer_D.step()
+                epsilon_penalty = (d_real ** 2).mean() * 0.001
 
-            # Train Generator
-            generator.zero_grad()
-            label.fill_(real_label)
-            output = discriminator(fake_images, 4)
-            errG = criterion(output.view(-1), label)
-            errG.backward()
-            D_G_z2 = output.mean().item()
-            optimizer_G.step()
+                d_loss = d_fake - d_real
+                d_loss_gp = d_loss + gradient_penalty + epsilon_penalty
 
-            print('[%d/%d][%d/%d] Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f / %.4f'
-                  % (epoch, num_epochs, i, len(dataloader),
-                     errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
+                d_loss_gp.backward()
+                d_optimizer.step()
 
-            if i % 100 == 0:
-                torch.utils.save_image(fake_images[:25], 'generated_images_epoch_%d_%d.png' % 
-                                       (epoch, i), nrow=5, normalize=True)
+                # generator
+                generator.zero_grad()
+                discriminator.zero_grad()
+
+                latent_dim = min(base_channels * 2 ** num_stages, 512)
+                z = torch.randn(batch_size[stage], latent_dim, 1, 1, device=device)
+
+                fake_images = generator(z, progress.alpha, progress.stage)
+                g_fake = discriminator(fake_images, progress.alpha, progress.stage).mean()
+                g_loss = -g_fake
+
+                g_loss.backward()
+                g_optimizer.step()
+
+            print("Stage:{:>2} | Epoch :{:>3} | D_Loss:{:>10.5f} | G_Loss:{:>10.5f}".format(stage, epoch, d_loss, g_loss))
+            fake_images = fake_images.permute(0, 2, 3, 1).cpu().detach().numpy()
+            fake_images = concat_image(fake_images)
+            fake_images = resize_image(fake_images, 200)
+            save_image("Results/{}stage_{}epoch.jpg".format(stage, epoch), fake_images)
 
 
 if __name__ == '__main__':
