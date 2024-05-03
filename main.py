@@ -87,7 +87,8 @@ def cross_validation_classifier(training_data):
     # Apply Transforms
     transform_train = transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Resize((1, 224, 224)),
+        transforms.Grayscale(num_output_channels=1),
+        transforms.Resize(224),
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
         transforms.RandomRotation(30),
@@ -237,7 +238,7 @@ def training_dcgan(training_data, images_class):
     # Batch size during training
     # batch_size = 16 -> benign
     # batch_size = 8 -> malignant
-    batch_size = 2
+    batch_size = 8
 
     # Spatial size of training images. All images will be resized to this
     #   size using a transformer.
@@ -258,7 +259,7 @@ def training_dcgan(training_data, images_class):
     # Number of training epochs
     # num_epochs = 2475 -> benign
     # num_epochs = 1750 -> malignant
-    num_epochs = 1050
+    num_epochs = 2475
 
     # Learning rate for optimizers
     lr = 0.0001 
@@ -426,12 +427,8 @@ def training_dcgan(training_data, images_class):
                                                   padding=5, normalize=True).cpu(), 
                                                   'Results/dcgan-real.png')
 
-    # Convert the images to grayscale
-    grayscale_transform = transforms.Grayscale(num_output_channels=1)
-
     for i, image in enumerate(img_list_only[-1]):
-        output_image = grayscale_transform(image)
-        vutils.save_image(output_image, 'Results/Categories/' + images_class + '/dcgan-' + str(i+1) + '.png')
+        vutils.save_image(image, 'Results/Categories/' + images_class + '/dcgan-' + str(i+1) + '.png')
 
     torchvision.utils.save_image(img_list_only[-1], 'Results/dcgan-fake-image-only.png')
     torchvision.utils.save_image(img_list[-1], 'Results/dcgan-fake-image-norm.png')
@@ -441,9 +438,9 @@ def training_dcgan(training_data, images_class):
 def train_pggan(training_data):
 
     num_stages = 5
-    num_epochs = 100
+    num_epochs = 650
     base_channels = 16
-    batch_size = [32, 32, 32, 32, 32, 16, 8, 4, 2]
+    batch_size = [32, 32, 32, 32, 32, 32]
     image_channels = 1
     ngpu = 1
 
@@ -515,12 +512,12 @@ def train_pggan(training_data):
                 g_loss.backward()
                 g_optimizer.step()
 
-            print("Stage:{:>2} | Epoch :{:>3} | D_Loss:{:>10.5f} | G_Loss:{:>10.5f}".format(stage, epoch, d_loss, g_loss))
-            fake_images = fake_images.permute(0, 2, 3, 1).cpu().detach().numpy()
-            fake_images = concat_image(fake_images)
-            fake_images = resize_image(fake_images, 200)
-            save_image("Results/{}stage_{}epoch.jpg".format(stage, epoch), fake_images)
-
+            if epoch % 100 == 0:
+                print("Stage:{:>2} | Epoch :{:>3} | D_Loss:{:>10.5f} | G_Loss:{:>10.5f}".format(stage, epoch, d_loss, g_loss))
+                fake_images = fake_images.permute(0, 2, 3, 1).cpu().detach().numpy()
+                fake_images = concat_image(fake_images)
+                fake_images = resize_image(fake_images, 224)
+                save_image("Results/{}_stage_{}epoch.jpg".format(stage, epoch), fake_images)
 
 if __name__ == '__main__':
 
@@ -536,14 +533,14 @@ if __name__ == '__main__':
 
     categories_classes = ["benign", "intermediate", "malignant"]
 
-    category_data = GAN_Categories(categories_classes[1])
+    category_data = GAN_Categories(categories_classes[0])
     train_category = category_data.class_data()
 
     # Train DCGAN
-    # training_dcgan(train_category, categories_classes[1])
+    # training_dcgan(train_category, categories_classes[0])
 
     # Train PGGAN
-    # train_pggan(train_category)
+    train_pggan(train_category)
 
     # Preprocessing - Classifier
     # real_data = Classifier_Categories("Categories")
