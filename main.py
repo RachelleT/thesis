@@ -438,9 +438,9 @@ def training_dcgan(training_data, images_class):
 def train_pggan(training_data):
 
     num_stages = 5
-    num_epochs = 650
+    num_epochs = 900
     base_channels = 16
-    batch_size = [32, 32, 32, 32, 32, 32]
+    batch_size = [16, 16, 16, 16, 16, 16]
     image_channels = 1
     ngpu = 1
 
@@ -451,6 +451,9 @@ def train_pggan(training_data):
 
     g_optimizer = optim.Adam(generator.parameters(), lr=1e-3, betas=(0, 0.99))
     d_optimizer = optim.Adam(discriminator.parameters(), lr=1e-3, betas=(0, 0.99))
+
+    # current time stamp
+    start = datetime.now()
 
     for stage in range(num_stages + 1):
 
@@ -515,9 +518,20 @@ def train_pggan(training_data):
             if epoch % 100 == 0:
                 print("Stage:{:>2} | Epoch :{:>3} | D_Loss:{:>10.5f} | G_Loss:{:>10.5f}".format(stage, epoch, d_loss, g_loss))
                 fake_images = fake_images.permute(0, 2, 3, 1).cpu().detach().numpy()
+                generated_images = fake_images
                 fake_images = concat_image(fake_images)
                 fake_images = resize_image(fake_images, 224)
-                save_image("Results/{}_stage_{}epoch.jpg".format(stage, epoch), fake_images)
+                save_image("Results/{}_stage_{}_epoch.jpg".format(stage, epoch), fake_images)
+
+    print(f"GPU used {torch.cuda.memory_allocated(device) / 1024**3} GB of memory.")
+
+    end = datetime.now()
+    td = (end - start).total_seconds() / 60
+    print(f"The time of execution of above program is: {td:.03f} minutes.")
+
+    for i in range(0, batch_size[0]):
+        pggan_image = resize_image(generated_images[i], 224)
+        save_image("Results/pggan_{}.jpg".format(i), pggan_image) 
 
 if __name__ == '__main__':
 
