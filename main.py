@@ -2,7 +2,7 @@ from collections import defaultdict
 from copy import deepcopy
 import random
 import torch.utils
-from eval import compute_metrics
+from eval import psnr
 from Models.dcgan import Discriminator_256, Generator_256
 from Preprocessing.preprocessing import Classifier_Categories, GAN_Categories, GAN_Entities
 from Preprocessing.dataset import Entities_Dataset, Categories_Dataset
@@ -11,7 +11,7 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 import torch.optim as optim
 import torchvision.utils as vutils
 from sklearn.model_selection import KFold
@@ -222,7 +222,7 @@ def cross_validation_classifier(training_data):
         print(f'Class {label}: {accuracy}%')
 
 
-def training_dcgan(training_data, images_class):
+def train_dcgan(training_data=None, images_class=None):
 
     # Set random seed for reproducibility
     manualSeed = 999
@@ -238,10 +238,11 @@ def training_dcgan(training_data, images_class):
     # Batch size during training
     # batch_size = 16 -> benign
     # batch_size = 8 -> malignant
-    batch_size = 8
+    batch_size = 128
 
     # Spatial size of training images. All images will be resized to this
     #   size using a transformer.
+    # image_size = 256
     image_size = 256
 
     # Number of channels in the training images. For color images this is 3
@@ -259,7 +260,7 @@ def training_dcgan(training_data, images_class):
     # Number of training epochs
     # num_epochs = 2475 -> benign
     # num_epochs = 1750 -> malignant
-    num_epochs = 2475
+    num_epochs = 1000
 
     # Learning rate for optimizers
     lr = 0.0001 
@@ -273,9 +274,10 @@ def training_dcgan(training_data, images_class):
     # Apply Transforms
     transform_train = transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Resize(image_size),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(),
+        transforms.Grayscale(),
+        transforms.Resize((image_size, image_size)),
+        # transforms.RandomHorizontalFlip(),
+        # transforms.RandomVerticalFlip(),
         transforms.ToTensor(),
         transforms.Normalize((0.5), (0.5)),
     ])
@@ -283,8 +285,7 @@ def training_dcgan(training_data, images_class):
     train_dataset = Categories_Dataset(training_data, transform_train)
 
     # Create the dataloader
-    dataloader = DataLoader(train_dataset, batch_size=batch_size,
-                            shuffle=True, num_workers=workers)
+    dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=workers)
 
     # Decide which device we want to run on
     device = torch.device("cuda:2" if (
@@ -410,7 +411,7 @@ def training_dcgan(training_data, images_class):
             D_losses.append(errD.item())
 
             # Check how the generator is doing by saving G's output on fixed_noise
-            if (iters % 500 == 0) or ((epoch == num_epochs - 1) and (i == len(dataloader) - 1)):
+            if (iters % 100 == 0) or ((epoch == num_epochs - 1) and (i == len(dataloader) - 1)):
                 with torch.no_grad():
                     fake = netG(fixed_noise).detach().cpu()
                 img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
@@ -428,19 +429,17 @@ def training_dcgan(training_data, images_class):
                                                   'Results/dcgan-real.png')
 
     for i, image in enumerate(img_list_only[-1]):
-        vutils.save_image(image, 'Results/Categories/' + images_class + '/dcgan-' + str(i+1) + '.png')
+        vutils.save_image(image, 'Results/' + images_class + '/dcgan-' + str(i+1) + '.png')
 
     torchvision.utils.save_image(img_list_only[-1], 'Results/dcgan-fake-image-only.png')
     torchvision.utils.save_image(img_list[-1], 'Results/dcgan-fake-image-norm.png')
-        
-    # compute_metrics_old(real=real_batch, fakes=img_list_only, image_size)
 
-def train_pggan(training_data):
+def train_pggan(training_data=None, image_class=None):
 
     num_stages = 5
-    num_epochs = 900
-    base_channels = 16
-    batch_size = [16, 16, 16, 16, 16, 16]
+    num_epochs = 650
+    base_channels = 8
+    batch_size = [32, 32, 32, 32, 32, 32]
     image_channels = 1
     ngpu = 1
 
@@ -459,6 +458,7 @@ def train_pggan(training_data):
 
         transform = transforms.Compose([
             transforms.ToPILImage(),
+            transforms.Grayscale(),
             transforms.Resize(4 * 2 ** min(stage, num_stages)),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5])])
@@ -517,6 +517,7 @@ def train_pggan(training_data):
 
             if epoch % 100 == 0:
                 print("Stage:{:>2} | Epoch :{:>3} | D_Loss:{:>10.5f} | G_Loss:{:>10.5f}".format(stage, epoch, d_loss, g_loss))
+                synthesized_images = fake_images
                 fake_images = fake_images.permute(0, 2, 3, 1).cpu().detach().numpy()
                 generated_images = fake_images
                 fake_images = concat_image(fake_images)
@@ -531,7 +532,11 @@ def train_pggan(training_data):
 
     for i in range(0, batch_size[0]):
         pggan_image = resize_image(generated_images[i], 224)
-        save_image("Results/pggan_{}.jpg".format(i), pggan_image) 
+        save_image('Results/PGGAN_Categories/' + image_class + '/pggan-' + str(i+1) + '.png', pggan_image) 
+
+    real_batch = next(iter(train_loader))
+    psnr_score = psnr(real_batch[0].numpy(), synthesized_images.cpu().detach().numpy())
+    print("PSNR: ", psnr_score)
 
 if __name__ == '__main__':
 
@@ -552,15 +557,17 @@ if __name__ == '__main__':
 
     # Train DCGAN
     # training_dcgan(train_category, categories_classes[0])
+    # train_dcgan(training_data=None, images_class="Mura")
 
     # Train PGGAN
-    train_pggan(train_category)
+    train_pggan(train_category, categories_classes[0])
+    # train_pggan(training_data=None, image_class="Mura")
 
     # Preprocessing - Classifier
     # real_data = Classifier_Categories("Categories")
     # train, test = real_data.split_data()
 
-    # synthetic_data = Classifier_Categories("Results/Categories")
+    # synthetic_data = Classifier_Categories("Results/DCGAN_Categories")
     # synthetic_train = synthetic_data.class_data()
     # train = train + synthetic_train
 
