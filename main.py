@@ -8,17 +8,16 @@ from Preprocessing.preprocessing import Classifier_Categories, GAN_Categories, G
 from Preprocessing.dataset import Entities_Dataset, Categories_Dataset
 from Models.classifier import ResNet
 import torch
-import torchvision
 import torchvision.transforms as transforms
 import torch.nn as nn
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 import torch.optim as optim
 import torchvision.utils as vutils
 from sklearn.model_selection import KFold
 from Models import pggan
 from datetime import datetime
-
-from utils import concat_image, resize_image, save_image, weights_init
+import matplotlib.pyplot as plt
+from utils import concat_image, extract_images_from_grid, resize_image, save_image, weights_init
 
 
 def training_classifier(training_data):
@@ -238,7 +237,7 @@ def train_dcgan(training_data=None, images_class=None):
     # Batch size during training
     # batch_size = 16 -> benign
     # batch_size = 8 -> malignant
-    batch_size = 128
+    batch_size = 32
 
     # Spatial size of training images. All images will be resized to this
     #   size using a transformer.
@@ -260,7 +259,7 @@ def train_dcgan(training_data=None, images_class=None):
     # Number of training epochs
     # num_epochs = 2475 -> benign
     # num_epochs = 1750 -> malignant
-    num_epochs = 1000
+    num_epochs = 2
 
     # Learning rate for optimizers
     lr = 0.0001 
@@ -275,9 +274,9 @@ def train_dcgan(training_data=None, images_class=None):
     transform_train = transforms.Compose([
         transforms.ToPILImage(),
         transforms.Grayscale(),
-        transforms.Resize((image_size, image_size)),
-        # transforms.RandomHorizontalFlip(),
-        # transforms.RandomVerticalFlip(),
+        transforms.Resize(image_size),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
         transforms.ToTensor(),
         transforms.Normalize((0.5), (0.5)),
     ])
@@ -286,6 +285,12 @@ def train_dcgan(training_data=None, images_class=None):
 
     # Create the dataloader
     dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=workers)
+    
+    # train_dataset = MURADataset(annotations_file='/home/rachelle_tr/Documents/MISBTC/MURA-v1.1/shoulder_image_paths.csv', 
+    #                                img_dir='/home/rachelle_tr/Documents/MISBTC', 
+    #                                transform=transform_train)
+ 
+    # dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=workers)
 
     # Decide which device we want to run on
     device = torch.device("cuda:2" if (
@@ -335,8 +340,6 @@ def train_dcgan(training_data=None, images_class=None):
     optimizerG = optim.Adam(netG.parameters(), lr=lr, betas=(beta1, 0.999))
 
     # Lists to keep track of progress
-    img_list = []
-    img_list_only = []
     G_losses = []
     D_losses = []
     iters = 0
@@ -411,35 +414,34 @@ def train_dcgan(training_data=None, images_class=None):
             D_losses.append(errD.item())
 
             # Check how the generator is doing by saving G's output on fixed_noise
-            if (iters % 100 == 0) or ((epoch == num_epochs - 1) and (i == len(dataloader) - 1)):
+            # if (iters % 100 == 0) or ((epoch == num_epochs - 1) and (i == len(dataloader) - 1)):
+            if (epoch + 1)  % 100 == 0:
                 with torch.no_grad():
                     fake = netG(fixed_noise).detach().cpu()
-                img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
-                img_list_only.append(fake)
-
+                grid = vutils.make_grid(fake, padding=2, normalize=True)
+                extract_images_from_grid(grid, epoch+1, 'Results/DCGAN_Categories/' + images_class)
             iters += 1
 
     end = datetime.now()
-    td = (end - start).total_seconds() * 10**3
-    print(f"The time of execution of above program is : {td:.03f}ms")
+    td = (end - start).total_seconds() / 60
+    print(f"The time of execution of above program is: {td:.03f} minutes.")
 
-    real_batch = next(iter(dataloader))
-    torchvision.utils.save_image(vutils.make_grid(real_batch[0].to(device)[:64], 
-                                                  padding=5, normalize=True).cpu(), 
-                                                  'Results/dcgan-real.png')
-
-    for i, image in enumerate(img_list_only[-1]):
-        vutils.save_image(image, 'Results/' + images_class + '/dcgan-' + str(i+1) + '.png')
-
-    torchvision.utils.save_image(img_list_only[-1], 'Results/dcgan-fake-image-only.png')
-    torchvision.utils.save_image(img_list[-1], 'Results/dcgan-fake-image-norm.png')
+    # Plot the loss curves
+    plt.figure(figsize=(10, 5))
+    plt.title("Generator and Discriminator Loss During Training")
+    plt.plot(G_losses, label="G")
+    plt.plot(D_losses, label="D")
+    plt.xlabel("Iterations")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.savefig('Results/Loss_Curves/dcgan-' + images_class + '-loss-curve.png')  # Save the plot
 
 def train_pggan(training_data=None, image_class=None):
 
     num_stages = 5
-    num_epochs = 650
+    num_epochs = 350 # 600 for benign
     base_channels = 8
-    batch_size = [32, 32, 32, 32, 32, 32]
+    batch_size = [8, 8, 8, 8, 8, 8] # 32 for benign
     image_channels = 1
     ngpu = 1
 
@@ -448,8 +450,10 @@ def train_pggan(training_data=None, image_class=None):
     generator = pggan.Generator(max_stage=num_stages, base_channels=base_channels, image_channels=image_channels).to(device)
     discriminator = pggan.Discriminator(max_stage=num_stages, base_channels=base_channels, image_channels=image_channels).to(device)
 
-    g_optimizer = optim.Adam(generator.parameters(), lr=1e-3, betas=(0, 0.99))
-    d_optimizer = optim.Adam(discriminator.parameters(), lr=1e-3, betas=(0, 0.99))
+    print(generator)
+
+    g_optimizer = optim.Adam(generator.parameters(), lr=1e-4, betas=(0, 0.99))
+    d_optimizer = optim.Adam(discriminator.parameters(), lr=1e-4, betas=(0, 0.99))
 
     # current time stamp
     start = datetime.now()
@@ -460,10 +464,14 @@ def train_pggan(training_data=None, image_class=None):
             transforms.ToPILImage(),
             transforms.Grayscale(),
             transforms.Resize(4 * 2 ** min(stage, num_stages)),
+            # transforms.Resize((4 * 2 ** min(stage, num_stages), 4 * 2 ** min(stage, num_stages))),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5])])
         
         train_dataset = Categories_Dataset(training_data, transform)
+        # train_dataset = MURADataset(annotations_file='/home/rachelle_tr/Documents/MISBTC/MURA-v1.1/shoulder_image_paths.csv', 
+        #                            img_dir='/home/rachelle_tr/Documents/MISBTC', 
+        #                            transform=transform)
     
         # Create the dataloader
         train_loader = DataLoader(train_dataset, batch_size=batch_size[stage], shuffle=True, drop_last=True)
@@ -556,11 +564,11 @@ if __name__ == '__main__':
     train_category = category_data.class_data()
 
     # Train DCGAN
-    # training_dcgan(train_category, categories_classes[0])
+    train_dcgan(train_category, categories_classes[0])
     # train_dcgan(training_data=None, images_class="Mura")
 
     # Train PGGAN
-    train_pggan(train_category, categories_classes[0])
+    # train_pggan(train_category, categories_classes[2])
     # train_pggan(training_data=None, image_class="Mura")
 
     # Preprocessing - Classifier
