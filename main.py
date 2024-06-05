@@ -8,6 +8,7 @@ from Preprocessing.preprocessing import Classifier_Categories, GAN_Categories, G
 from Preprocessing.dataset import Entities_Dataset, Categories_Dataset
 from Models.classifier import ResNet
 import torch
+import torchvision
 import torchvision.transforms as transforms
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -17,7 +18,7 @@ from sklearn.model_selection import KFold
 from Models import pggan
 from datetime import datetime
 import matplotlib.pyplot as plt
-from utils import concat_image, extract_images_from_grid, resize_image, save_image, weights_init
+from utils import concat_image, extract_images_from_grid, resize_image, save_image, select_random, weights_init
 
 
 def training_classifier(training_data):
@@ -235,8 +236,9 @@ def train_dcgan(training_data=None, images_class=None):
     workers = 2
 
     # Batch size during training
-    # batch_size = 16 -> benign
-    # batch_size = 8 -> malignant
+    # batch_size = 32 -> benign
+    # batch_size = 8 -> intermediate
+    # batch_size = 16 -> intermediate
     batch_size = 32
 
     # Spatial size of training images. All images will be resized to this
@@ -257,12 +259,15 @@ def train_dcgan(training_data=None, images_class=None):
     ndf = 8
 
     # Number of training epochs
-    # num_epochs = 2475 -> benign
-    # num_epochs = 1750 -> malignant
-    num_epochs = 2
+    # num_epochs = 2500 -> benign
+    # num_epochs = 800 -> intermediate
+    # num_epochs = 1500 -> malignant
+    num_epochs = 2500
 
     # Learning rate for optimizers
-    lr = 0.0001 
+    # lr = 0.0001 -> benign, malignant 
+    # lr = 0.001 -> intermediate
+    lr = 0.0001
 
     # Beta1 hyperparameter for Adam optimizers
     beta1 = 0.5
@@ -285,12 +290,6 @@ def train_dcgan(training_data=None, images_class=None):
 
     # Create the dataloader
     dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=workers)
-    
-    # train_dataset = MURADataset(annotations_file='/home/rachelle_tr/Documents/MISBTC/MURA-v1.1/shoulder_image_paths.csv', 
-    #                                img_dir='/home/rachelle_tr/Documents/MISBTC', 
-    #                                transform=transform_train)
- 
-    # dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=workers)
 
     # Decide which device we want to run on
     device = torch.device("cuda:2" if (
@@ -425,6 +424,8 @@ def train_dcgan(training_data=None, images_class=None):
     end = datetime.now()
     td = (end - start).total_seconds() / 60
     print(f"The time of execution of above program is: {td:.03f} minutes.")
+
+    torchvision.utils.save_image(grid, 'Results/dcgan-fake-image-norm-' + images_class + '.png')
 
     # Plot the loss curves
     plt.figure(figsize=(10, 5))
@@ -564,7 +565,7 @@ if __name__ == '__main__':
     train_category = category_data.class_data()
 
     # Train DCGAN
-    train_dcgan(train_category, categories_classes[0])
+    # train_dcgan(train_category, categories_classes[0])
     # train_dcgan(training_data=None, images_class="Mura")
 
     # Train PGGAN
@@ -572,13 +573,16 @@ if __name__ == '__main__':
     # train_pggan(training_data=None, image_class="Mura")
 
     # Preprocessing - Classifier
-    # real_data = Classifier_Categories("Categories")
-    # train, test = real_data.split_data()
+    real_data = Classifier_Categories("Categories")
+    train, test = real_data.split_data()
 
-    # synthetic_data = Classifier_Categories("Results/DCGAN_Categories")
-    # synthetic_train = synthetic_data.class_data()
-    # train = train + synthetic_train
+    synthetic_data = Classifier_Categories("Results/DCGAN_Categories")
+    synthetic_train = synthetic_data.class_data()
+    
+    synthetic_list = select_random(synthetic_train, 0.10)
+    
+    real_syn_data = train + synthetic_list
 
     # Train Classifier
-    # cross_validation_classifier(train)
+    # cross_validation_classifier(real_syn_data)
     # training_classifier(train)

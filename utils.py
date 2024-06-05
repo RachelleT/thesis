@@ -1,4 +1,6 @@
+from collections import defaultdict
 import os
+import random
 import cv2
 import numpy as np
 import torch.nn as nn
@@ -57,3 +59,17 @@ def extract_images_from_grid(grid, epoch, output_dir, num_images_per_row=8, padd
             counter += 1
     
     # return images
+
+def select_random(data, percent):
+    # Group elements by class
+    grouped = defaultdict(list)
+    for item in data:
+        grouped[item[1]].append(item)
+
+    # Select 10% of each class
+    selected = []
+    for class_items in grouped.values():
+        ten_percent_length = int(len(class_items) * percent)
+        selected.extend(random.sample(class_items, ten_percent_length))
+
+    return selected
