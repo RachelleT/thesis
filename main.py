@@ -2,13 +2,14 @@ from collections import defaultdict
 from copy import deepcopy
 import random
 import torch.utils
-from eval import psnr
+from eval import calculate_metrics
 from Models.dcgan import Discriminator_256, Generator_256
 from Preprocessing.preprocessing import Classifier_Categories, GAN_Categories, GAN_Entities
 from Preprocessing.dataset import Entities_Dataset, Categories_Dataset
 from Models.classifier import ResNet
 import torch
 import torchvision
+import torch.nn.functional as F
 import torchvision.transforms as transforms
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -18,7 +19,7 @@ from sklearn.model_selection import KFold
 from Models import pggan
 from datetime import datetime
 import matplotlib.pyplot as plt
-from utils import concat_image, extract_images_from_grid, resize_image, save_image, select_random, weights_init
+from utils import extract_images_from_grid, get_last_batch, save_image_as_1_224_224, select_random, weights_init
 
 
 def training_classifier(training_data):
@@ -87,8 +88,8 @@ def cross_validation_classifier(training_data):
     # Apply Transforms
     transform_train = transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Grayscale(num_output_channels=1),
-        transforms.Resize(224),
+        # transforms.Grayscale(num_output_channels=1),
+        # transforms.Resize(224),
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
         transforms.RandomRotation(30),
@@ -115,6 +116,9 @@ def cross_validation_classifier(training_data):
 
     # Initialize the k-fold cross validation
     kf = KFold(n_splits=k_folds, shuffle=True)
+
+    # current time stamp
+    start = datetime.now()
 
     # Loop through each fold
     for fold, (train_idx, test_idx) in enumerate(kf.split(train_dataset)):
@@ -206,6 +210,10 @@ def cross_validation_classifier(training_data):
             print('--------------------------------')
             results[fold + 1] = 100.0 * (correct / total)
 
+    end = datetime.now()
+    td = (end - start).total_seconds() / 60
+    print(f"The time of execution of above program is: {td:.03f} minutes.")
+
     # Print fold results
     print(f'K-FOLD CROSS VALIDATION RESULTS FOR {k_folds} FOLDS')
     print('--------------------------------')
@@ -238,8 +246,8 @@ def train_dcgan(training_data=None, images_class=None):
     # Batch size during training
     # batch_size = 32 -> benign
     # batch_size = 8 -> intermediate
-    # batch_size = 16 -> intermediate
-    batch_size = 32
+    # batch_size = 16 -> malignant
+    batch_size = 16
 
     # Spatial size of training images. All images will be resized to this
     #   size using a transformer.
@@ -262,7 +270,7 @@ def train_dcgan(training_data=None, images_class=None):
     # num_epochs = 2500 -> benign
     # num_epochs = 800 -> intermediate
     # num_epochs = 1500 -> malignant
-    num_epochs = 2500
+    num_epochs = 1500
 
     # Learning rate for optimizers
     # lr = 0.0001 -> benign, malignant 
@@ -278,7 +286,6 @@ def train_dcgan(training_data=None, images_class=None):
     # Apply Transforms
     transform_train = transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Grayscale(),
         transforms.Resize(image_size),
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
@@ -326,10 +333,6 @@ def train_dcgan(training_data=None, images_class=None):
     # Initialize the ``BCELoss`` function
     criterion = nn.BCELoss()
 
-    # Create batch of latent vectors that we will use to visualize
-    #  the progression of the generator
-    fixed_noise = torch.randn(64, nz, 1, 1, device=device)
-
     # Establish convention for real and fake labels during training
     real_label = 1.
     fake_label = 0.
@@ -342,6 +345,7 @@ def train_dcgan(training_data=None, images_class=None):
     G_losses = []
     D_losses = []
     iters = 0
+    counter = 1
 
     # current time stamp
     start = datetime.now()
@@ -403,7 +407,7 @@ def train_dcgan(training_data=None, images_class=None):
             optimizerG.step()
 
             # Output training stats
-            if i % 50 == 0:
+            if epoch % 50 == 0:
                 print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\tD(x): %.4f\tD(G(z)): %.4f / %.4f'
                       % (epoch, num_epochs, i, len(dataloader),
                          errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
@@ -412,24 +416,17 @@ def train_dcgan(training_data=None, images_class=None):
             G_losses.append(errG.item())
             D_losses.append(errD.item())
 
-            # Check how the generator is doing by saving G's output on fixed_noise
-            # if (iters % 100 == 0) or ((epoch == num_epochs - 1) and (i == len(dataloader) - 1)):
-            if (epoch + 1)  % 100 == 0:
-                with torch.no_grad():
-                    fake = netG(fixed_noise).detach().cpu()
-                grid = vutils.make_grid(fake, padding=2, normalize=True)
-                extract_images_from_grid(grid, epoch+1, 'Results/DCGAN_Categories/' + images_class)
             iters += 1
+
+    # print(f"GPU used {torch.cuda.memory_allocated(device) / 1024**3} GB of memory.")
 
     end = datetime.now()
     td = (end - start).total_seconds() / 60
     print(f"The time of execution of above program is: {td:.03f} minutes.")
 
-    torchvision.utils.save_image(grid, 'Results/dcgan-fake-image-norm-' + images_class + '.png')
-
     # Plot the loss curves
     plt.figure(figsize=(10, 5))
-    plt.title("Generator and Discriminator Loss During Training")
+    plt.title("DCGAN Generator and Discriminator Loss During Training")
     plt.plot(G_losses, label="G")
     plt.plot(D_losses, label="D")
     plt.xlabel("Iterations")
@@ -437,12 +434,43 @@ def train_dcgan(training_data=None, images_class=None):
     plt.legend()
     plt.savefig('Results/Loss_Curves/dcgan-' + images_class + '-loss-curve.png')  # Save the plot
 
+    # End of training loop, generate and save multiple samples
+    netG.eval()
+    num_samples = int(len(training_data) / 64) + 1
+    for i in range(num_samples):  # Generate samples
+        with torch.no_grad():
+            noise = torch.randn(64, nz, 1, 1, device=device)
+            fake = netG(noise).detach().cpu()
+        grid = vutils.make_grid(fake, padding=2, normalize=True)
+        extract_images_from_grid(grid, num_epochs, 'Results/DCGAN_Categories/' + images_class, counter)
+        counter += 64
+    
+    # Generate corresponding fake images
+    netG.eval()
+    real_images = []
+    generated_images = []
+    with torch.no_grad():
+        noise = torch.randn(b_size, nz, 1, 1, device=device)
+        fake = netG(noise).detach().cpu()
+        
+        # Append real and generated images to lists
+        real_images.append(real_cpu.cpu())
+        generated_images.append(fake)
+
+    # Calculate metrics
+    avg_psnr, avg_ssim, avg_nmse = calculate_metrics(real_images, generated_images)
+    print(f'Average PSNR: {avg_psnr:.4f}')
+    print(f'Average SSIM: {avg_ssim:.4f}')
+    print(f'Average NMSE: {avg_nmse:.4f}')
+    
+
 def train_pggan(training_data=None, image_class=None):
 
-    num_stages = 5
-    num_epochs = 350 # 600 for benign
+    num_stages = 3
+    num_epochs = 50 # 600 for benign
+    num_samples = 529
     base_channels = 8
-    batch_size = [8, 8, 8, 8, 8, 8] # 32 for benign
+    batch_size = [16, 16, 16, 16, 16, 16, 16] # 32 for benign
     image_channels = 1
     ngpu = 1
 
@@ -453,8 +481,12 @@ def train_pggan(training_data=None, image_class=None):
 
     print(generator)
 
-    g_optimizer = optim.Adam(generator.parameters(), lr=1e-4, betas=(0, 0.99))
-    d_optimizer = optim.Adam(discriminator.parameters(), lr=1e-4, betas=(0, 0.99))
+    g_optimizer = optim.Adam(generator.parameters(), lr=1e-3, betas=(0, 0.99))
+    d_optimizer = optim.Adam(discriminator.parameters(), lr=1e-3, betas=(0, 0.99))
+
+    # Initialize lists to store the loss values
+    d_losses = []
+    g_losses = []
 
     # current time stamp
     start = datetime.now()
@@ -470,9 +502,6 @@ def train_pggan(training_data=None, image_class=None):
             transforms.Normalize([0.5], [0.5])])
         
         train_dataset = Categories_Dataset(training_data, transform)
-        # train_dataset = MURADataset(annotations_file='/home/rachelle_tr/Documents/MISBTC/MURA-v1.1/shoulder_image_paths.csv', 
-        #                            img_dir='/home/rachelle_tr/Documents/MISBTC', 
-        #                            transform=transform)
     
         # Create the dataloader
         train_loader = DataLoader(train_dataset, batch_size=batch_size[stage], shuffle=True, drop_last=True)
@@ -510,6 +539,9 @@ def train_pggan(training_data=None, image_class=None):
                 d_loss_gp.backward()
                 d_optimizer.step()
 
+                # Append discriminator loss
+                d_losses.append(d_loss_gp.item())
+
                 # generator
                 generator.zero_grad()
                 discriminator.zero_grad()
@@ -524,28 +556,56 @@ def train_pggan(training_data=None, image_class=None):
                 g_loss.backward()
                 g_optimizer.step()
 
-            if epoch % 100 == 0:
-                print("Stage:{:>2} | Epoch :{:>3} | D_Loss:{:>10.5f} | G_Loss:{:>10.5f}".format(stage, epoch, d_loss, g_loss))
-                synthesized_images = fake_images
-                fake_images = fake_images.permute(0, 2, 3, 1).cpu().detach().numpy()
-                generated_images = fake_images
-                fake_images = concat_image(fake_images)
-                fake_images = resize_image(fake_images, 224)
-                save_image("Results/{}_stage_{}_epoch.jpg".format(stage, epoch), fake_images)
+                # Append generator loss
+                g_losses.append(g_loss.item())
 
-    print(f"GPU used {torch.cuda.memory_allocated(device) / 1024**3} GB of memory.")
+            if epoch % 50 == 0:
+                print("Stage:{:>2} | Epoch :{:>3} | D_Loss:{:>10.5f} | G_Loss:{:>10.5f}".format(stage, epoch, d_loss, g_loss))
+
+    # print(f"GPU used {torch.cuda.memory_allocated(device) / 1024**3} GB of memory.")
 
     end = datetime.now()
     td = (end - start).total_seconds() / 60
     print(f"The time of execution of above program is: {td:.03f} minutes.")
 
-    for i in range(0, batch_size[0]):
-        pggan_image = resize_image(generated_images[i], 224)
-        save_image('Results/PGGAN_Categories/' + image_class + '/pggan-' + str(i+1) + '.png', pggan_image) 
+    # Plot the loss curves
+    plt.figure(figsize=(10, 5))
+    plt.title("PGGAN Generator and Discriminator Loss During Training")
+    plt.plot(g_losses, label="G")
+    plt.plot(d_losses, label="D")
+    plt.xlabel("Iterations")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.savefig('Results/Loss_Curves/pggan-' + image_class + '-loss-curve.png')  # Save the plot
 
-    real_batch = next(iter(train_loader))
-    psnr_score = psnr(real_batch[0].numpy(), synthesized_images.cpu().detach().numpy())
-    print("PSNR: ", psnr_score)
+    # Generate multiple samples at the end of the last iteration
+    generator.eval()
+    with torch.no_grad():
+        latent_dim = min(base_channels * 2 ** num_stages, 512)
+        for i in range(num_samples):
+            z = torch.randn(1, latent_dim, 1, 1, device=device)
+            pggan_image = generator(z, progress.alpha, progress.stage).squeeze().cpu().detach().numpy()
+            pggan_image = (pggan_image + 1) / 2  # Rescale image to [0, 1]
+            save_image_as_1_224_224(pggan_image, 'Results/PGGAN_Categories/' + image_class + '/pggan-' + str(i+1) + '.png')
+
+    # Get the last real batch for metrics calculation
+    last_real_batch = get_last_batch(train_loader)
+    real_images, labels = last_real_batch
+    real_images = real_images
+
+    # Generate corresponding fake images
+    generator.eval()
+    with torch.no_grad():
+        latent_dim = min(base_channels * 2 ** num_stages, 512)
+        z = torch.randn(real_images.size(0), latent_dim, 1, 1, device=device)
+        generated_images = generator(z, progress.alpha, progress.stage).cpu()
+
+    # Calculate metrics
+    avg_psnr, avg_ssim, avg_nmse = calculate_metrics(real_images, generated_images)
+
+    print(f'Average PSNR: {avg_psnr:.4f}')
+    print(f'Average SSIM: {avg_ssim:.4f}')
+    print(f'Average NMSE: {avg_nmse:.4f}')
 
 if __name__ == '__main__':
 
@@ -561,27 +621,25 @@ if __name__ == '__main__':
 
     categories_classes = ["benign", "intermediate", "malignant"]
 
-    category_data = GAN_Categories(categories_classes[0])
+    category_data = GAN_Categories(categories_classes[2])
     train_category = category_data.class_data()
 
     # Train DCGAN
-    # train_dcgan(train_category, categories_classes[0])
-    # train_dcgan(training_data=None, images_class="Mura")
+    train_dcgan(train_category, categories_classes[2])
 
     # Train PGGAN
     # train_pggan(train_category, categories_classes[2])
-    # train_pggan(training_data=None, image_class="Mura")
 
     # Preprocessing - Classifier
-    real_data = Classifier_Categories("Categories")
-    train, test = real_data.split_data()
+    # real_data = Classifier_Categories("Categories")
+    # train, test = real_data.split_data()
 
-    synthetic_data = Classifier_Categories("Results/DCGAN_Categories")
-    synthetic_train = synthetic_data.class_data()
+    # synthetic_data = Classifier_Categories("Results/DCGAN_Categories")
+    # synthetic_train = synthetic_data.class_data()
     
-    synthetic_list = select_random(synthetic_train, 0.10)
+    # synthetic_list = select_random(synthetic_train, 0.50)
     
-    real_syn_data = train + synthetic_list
+    # real_syn_data = train + synthetic_train
 
     # Train Classifier
     # cross_validation_classifier(real_syn_data)

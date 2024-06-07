@@ -1,10 +1,10 @@
-from collections import defaultdict
 import os
-import random
-import cv2
 import numpy as np
 import torch.nn as nn
 import torchvision
+from PIL import Image
+from collections import defaultdict
+import random
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -14,22 +14,30 @@ def weights_init(m):
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
 
-def resize_image(image, size):
-    image = cv2.resize(image, (size, size), cv2.INTER_NEAREST)
-    return image
+def save_image_as_1_224_224(image_tensor, output_image_path):
+    # Convert the image tensor to a PIL image
+    img = torchvision.transforms.ToPILImage()(image_tensor)
 
-def concat_image(images):
-    b, h, w, c = images.shape
-    num_side = int(np.sqrt(b))
-    image = np.vstack([np.hstack(images[i * num_side:(i + 1) * num_side]) for i in range(num_side)])
-    return image
+    # Resize the image to (224, 224)
+    img_resized = img.resize((224, 224))
 
+    # Convert the image to a NumPy array
+    img_array = np.array(img_resized)
 
-def save_image(file_name, image):
-    image = np.array((image + 1) * 127.5, dtype="uint8")
-    cv2.imwrite(file_name, image)
+    # If the image has 3 channels (RGB), convert it to a single channel grayscale image
+    if img_array.ndim == 3:
+        img_array = np.mean(img_array, axis=2)
 
-def extract_images_from_grid(grid, epoch, output_dir, num_images_per_row=8, padding=2):
+    # Reshape the array to (1, 224, 224)
+    img_array_reshaped = img_array.reshape((1, 224, 224))
+
+    # Convert the reshaped array back to an image
+    img_to_save = Image.fromarray(img_array_reshaped[0].astype(np.uint8))
+
+    # Save the image
+    img_to_save.save(output_image_path)
+
+def extract_images_from_grid(grid, epoch, output_dir, counter, num_images_per_row=8, padding=2):
     
     # print("Extracting from grid.")
     # Get the total size of the grid
@@ -40,7 +48,7 @@ def extract_images_from_grid(grid, epoch, output_dir, num_images_per_row=8, padd
     
     # List to store individual images
     images = []
-    counter = 0
+    # counter = 1
     
     for i in range(num_images_per_row):
         for j in range(num_images_per_row):
@@ -55,7 +63,8 @@ def extract_images_from_grid(grid, epoch, output_dir, num_images_per_row=8, padd
             
             # Save the individual image
             image_path = os.path.join(output_dir, f'image_{epoch}_{counter}.png')
-            torchvision.utils.save_image(image, image_path)
+            save_image_as_1_224_224(image, image_path)
+            # torchvision.utils.save_image(image, image_path)
             counter += 1
     
     # return images
@@ -73,3 +82,9 @@ def select_random(data, percent):
         selected.extend(random.sample(class_items, ten_percent_length))
 
     return selected
+
+def get_last_batch(data_loader):
+    last_batch = None
+    for batch in data_loader:
+        last_batch = batch
+    return last_batch
