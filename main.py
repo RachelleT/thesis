@@ -2,6 +2,7 @@ from collections import defaultdict
 from copy import deepcopy
 import random
 import torch.utils
+from analysis import tsne
 from eval import calculate_metrics
 from Models.dcgan import Discriminator_256, Generator_256
 from Preprocessing.preprocessing import Classifier_Categories, GAN_Categories, GAN_Entities
@@ -444,7 +445,7 @@ def train_dcgan(training_data=None, images_class=None):
         grid = vutils.make_grid(fake, padding=2, normalize=True)
         extract_images_from_grid(grid, num_epochs, 'Results/DCGAN_Categories/' + images_class, counter)
         counter += 64
-    
+
     # Generate corresponding fake images
     netG.eval()
     real_images = []
@@ -458,19 +459,18 @@ def train_dcgan(training_data=None, images_class=None):
         generated_images.append(fake)
 
     # Calculate metrics
-    avg_psnr, avg_ssim, avg_nmse = calculate_metrics(real_images, generated_images)
+    avg_psnr, avg_ssim = calculate_metrics(real_images, generated_images)
     print(f'Average PSNR: {avg_psnr:.4f}')
     print(f'Average SSIM: {avg_ssim:.4f}')
-    print(f'Average NMSE: {avg_nmse:.4f}')
     
 
 def train_pggan(training_data=None, image_class=None):
 
-    num_stages = 3
-    num_epochs = 50 # 600 for benign
-    num_samples = 529
+    num_stages = 5
+    num_epochs = 200 # 600 - benign, 600 - malignant
+    num_samples = 136
     base_channels = 8
-    batch_size = [16, 16, 16, 16, 16, 16, 16] # 32 for benign
+    batch_size = [2, 2, 2, 2, 2, 2] # 32 for benign
     image_channels = 1
     ngpu = 1
 
@@ -480,6 +480,7 @@ def train_pggan(training_data=None, image_class=None):
     discriminator = pggan.Discriminator(max_stage=num_stages, base_channels=base_channels, image_channels=image_channels).to(device)
 
     print(generator)
+    print(discriminator)
 
     g_optimizer = optim.Adam(generator.parameters(), lr=1e-3, betas=(0, 0.99))
     d_optimizer = optim.Adam(discriminator.parameters(), lr=1e-3, betas=(0, 0.99))
@@ -601,11 +602,10 @@ def train_pggan(training_data=None, image_class=None):
         generated_images = generator(z, progress.alpha, progress.stage).cpu()
 
     # Calculate metrics
-    avg_psnr, avg_ssim, avg_nmse = calculate_metrics(real_images, generated_images)
+    avg_psnr, avg_ssim = calculate_metrics(real_images, generated_images)
 
     print(f'Average PSNR: {avg_psnr:.4f}')
     print(f'Average SSIM: {avg_ssim:.4f}')
-    print(f'Average NMSE: {avg_nmse:.4f}')
 
 if __name__ == '__main__':
 
@@ -621,14 +621,14 @@ if __name__ == '__main__':
 
     categories_classes = ["benign", "intermediate", "malignant"]
 
-    category_data = GAN_Categories(categories_classes[2])
+    category_data = GAN_Categories(categories_classes[1])
     train_category = category_data.class_data()
 
     # Train DCGAN
-    train_dcgan(train_category, categories_classes[2])
+    # train_dcgan(train_category, categories_classes[2])
 
     # Train PGGAN
-    # train_pggan(train_category, categories_classes[2])
+    # train_pggan(train_category, categories_classes[1])
 
     # Preprocessing - Classifier
     # real_data = Classifier_Categories("Categories")
@@ -644,3 +644,6 @@ if __name__ == '__main__':
     # Train Classifier
     # cross_validation_classifier(real_syn_data)
     # training_classifier(train)
+
+    # Analysis
+    tsne('Results/DCGAN_Categories', categories_classes)
