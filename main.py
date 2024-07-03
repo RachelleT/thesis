@@ -139,7 +139,8 @@ def cross_validation_classifier(training_data):
         )
 
         # Initialize the model and optimizer
-        model = ResNet.ResNet50(10, 1).to(device)
+        # model = ResNet.ResNet50(10, 1).to(device)
+        model = ResNet.ResNet50(3, 1).to(device)
         optimizer = optim.Adam(model.parameters(), lr=0.01)
 
         # Train the model on the current fold
